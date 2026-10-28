@@ -147,7 +147,9 @@ sealed class Canvas
         var added = new List<CanvasWindow>();
         ownedArrived.Clear();
         ownedLeft.Clear();
-        var found = CanvasWindow.Scan(); // topmost first
+        var admin = new List<nint>();
+        var found = CanvasWindow.Scan(admin); // topmost first
+        NoteAdminWindows(admin);
         var known = windows.ToDictionary(w => w.Hwnd);
         var next = new List<CanvasWindow>(found.Count);
         for (int i = found.Count - 1; i >= 0; i--)
@@ -314,6 +316,7 @@ sealed class Canvas
             camera.Origin = new Vec(Layout.Round(camera.Origin.X), Layout.Round(camera.Origin.Y));
         }
         Sync();
+        if (saved?.HandOver == true) Originals.Adopt(windows);
         var open = OpenKeys();
         int restored = windows.Count(w => TakeSavedSpot(w, open));
         // Saved on another screen, perhaps: fitted to this one from the home layout.
@@ -347,15 +350,16 @@ sealed class Canvas
         if (initialSyncDone && !paused) SetTimer(overlay.Hwnd, SaveTimer, 1000, 0);
     }
 
-    /// `cleanExit`: windows are about to be put back where they were (quit, pause).
-    void Save(bool cleanExit = false)
+    /// `cleanExit`: windows are about to be put back where they were (quit, pause). `handOver`:
+    /// they're staying put for the next Expanse (HandOver).
+    void Save(bool cleanExit = false, bool handOver = false)
     {
         if (paused || !initialSyncDone) return;
         HomeFromCanvas();
         // Windows away (minimised, hidden) keep their spots too, and so do saved ones not open now.
         var layout = new SavedLayout
         {
-            CenterX = camera.Center(ViewSize).X, CenterY = camera.Center(ViewSize).Y, CleanExit = cleanExit,
+            CenterX = camera.Center(ViewSize).X, CenterY = camera.Center(ViewSize).Y, CleanExit = cleanExit, HandOver = handOver,
             Windows = windows.Concat(departed.Values.Where(w => IsWindow(w.Hwnd))).Select(LayoutStore.Entry)
                 .Concat(savedPool.Take(60)).ToList(),
         };
@@ -1125,6 +1129,7 @@ sealed class Canvas
         new("Auto-Centre Focused Window", () => { settings.AutoCentre = !settings.AutoCentre; settings.Save(); }, settings.AutoCentre),
         new("Desktop Picture Background", () => { settings.Wallpaper = !settings.Wallpaper; settings.Save(); }, settings.Wallpaper),
         new("Tidy Up Windows", Tidy, Enabled: !paused),
+        new(Elevation.IsElevated ? "Include Admin Windows" : "Include Admin Windows…", ToggleAdminWindows, Elevation.IsElevated, Enabled: !paused),
         new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
         null,
         new("Quit Expanse", Quit),
@@ -1779,6 +1784,10 @@ sealed class Canvas
         {
             case "state": request.Reply(State()); break;
             case "windows": request.Reply(CanvasWindow.Describe()); break;
+            case "admin": // as Include Admin Windows on the tray menu
+                request.Reply(Elevation.IsElevated ? "starting again as you" : "starting again as administrator (Windows asks first)");
+                ToggleAdminWindows();
+                break;
             case "log": request.Reply(Log.Recent(int.TryParse(arg, out int n) ? n : 60)); break;
             case "toggle": Toggle(); WhenIdle(request); break;
             case "zoomout": Enter(zoomOut: true); WhenIdle(request); break;
@@ -1916,6 +1925,57 @@ sealed class Canvas
     }
 
     /// Puts every window back where it was before Expanse moved it, then quits.
+    // MARK: Admin windows
+
+    /// Admin windows seen, each logged once; the first ever also gets a note from the tray icon.
+    readonly HashSet<nint> adminWindows = new();
+
+    void NoteAdminWindows(List<nint> found)
+    {
+        foreach (var h in found.Where(adminWindows.Add))
+        {
+            Log.Info($"admin window 0x{h:X} \"{Title(h)}\" stays off the canvas: Expanse isn't running as administrator");
+            if (settings.AdminNoteShown) continue;
+            string title = Title(h);
+            if (title.Length > 40) title = title[..39] + "…";
+            tray.Notify("Expanse can't move admin windows",
+                $"\"{title}\" runs as administrator. To include such windows, choose Include Admin Windows from Expanse's menu.");
+            settings.AdminNoteShown = true;
+            settings.Save();
+        }
+        adminWindows.RemoveWhere(h => !IsWindow(h));
+    }
+
+    /// Include Admin Windows: Expanse starts again as administrator (Windows asks you), or, ticked
+    /// already, as you. The new one takes over where this one is (HandOver).
+    void ToggleAdminWindows()
+    {
+        bool want = !Elevation.IsElevated;
+        if (active || !(want ? Elevation.StartElevated() : Elevation.StartNormal())) return;
+        settings.RunAsAdmin = want;
+        settings.Save();
+        Log.Info(want ? "handing over to Expanse run as administrator" : "handing over to Expanse run as you");
+        // Run as you, the next one can't move admin windows: they go back where they were first,
+        // or one parked off screen would be stranded there.
+        if (!want && windows.Where(Elevation.AdminWindow).ToList() is { Count: > 0 } admin)
+        {
+            Originals.Restore(admin);
+            Log.Info($"put {admin.Count} admin windows back first: Expanse run as you can't move them");
+        }
+        HandOver();
+    }
+
+    /// Quits leaving everything as it is for the Expanse taking over: windows where they are, the
+    /// layout saved, and where they were before Expanse moved them (originals.json) kept for it.
+    void HandOver()
+    {
+        events.Dispose();
+        tray.Dispose();
+        Save(handOver: true);
+        Originals.Save(windows);
+        PostQuitMessage(0);
+    }
+
     public void Quit()
     {
         events.Dispose();

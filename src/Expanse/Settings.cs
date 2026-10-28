@@ -12,6 +12,13 @@ sealed class Settings
     /// The desktop picture behind the canvas; off, a plain dark background.
     public bool Wallpaper { get; set; } = true;
 
+    /// Include Admin Windows: Expanse runs as administrator (Windows asks each time it starts) so
+    /// it can move admin windows too. See Elevation.
+    public bool RunAsAdmin { get; set; }
+
+    /// The note about admin windows staying put has been shown (once ever).
+    public bool AdminNoteShown { get; set; }
+
     static string File => Path.Combine(Log.Folder, "settings.json");
 
     public static Settings Load()

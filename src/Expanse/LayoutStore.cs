@@ -13,6 +13,9 @@ sealed class SavedLayout
     public double CenterY { get; set; }
     /// The last run put windows back where they were before exiting (quit or pause).
     public bool CleanExit { get; set; }
+    /// The last run handed over to a new one (run as administrator, or back): windows are where
+    /// it left them, and its originals.json carries over.
+    public bool HandOver { get; set; }
     public List<SavedWindow> Windows { get; set; } = new();
 }
 

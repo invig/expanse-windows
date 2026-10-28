@@ -153,14 +153,15 @@ sealed class CanvasWindow
 
     /// Top-level windows that belong on the canvas, topmost first (EnumWindows order): the
     /// Alt-Tab set, minus minimised, cloaked (other virtual desktops, suspended UWP apps) and
-    /// owned windows, and minus our own.
-    public static List<nint> Scan()
+    /// owned windows, and minus our own. Admin windows Expanse can't move (see Elevation) are
+    /// left off, and listed in `admin`.
+    public static List<nint> Scan(List<nint>? admin = null)
     {
         var found = new List<nint>();
         uint self = Kernel32.GetCurrentProcessId();
         EnumWindows((h, _) =>
         {
-            if (Belongs(h, self)) found.Add(h);
+            if (Belongs(h, self, admin)) found.Add(h);
             return true;
         }, 0);
         return found;
@@ -198,7 +199,7 @@ sealed class CanvasWindow
         GetWindowThreadProcessId(h, out uint pid);
         if (pid == self || Dwm.IsCloaked(h)) return false;
         var f = Dwm.FrameBounds(h);
-        return f.Width >= 40 && f.Height >= 30;
+        return f.Width >= 40 && f.Height >= 30 && (Elevation.IsElevated || !Elevation.AboveUs(h));
     }
 
     /// Every visible top-level window, topmost first, with what decides whether it's on the
@@ -212,7 +213,8 @@ sealed class CanvasWindow
             if (!IsWindowVisible(h)) return true;
             nint owner = GetWindow(h, GW_OWNER);
             var f = Dwm.FrameBounds(h);
-            string kind = Belongs(h, self) ? "canvas" : IsOwned(h, self) ? "owned" : "-";
+            string kind = Belongs(h, self, null) ? "canvas" : IsOwned(h, self) ? "owned" : "-";
+            if (Elevation.AboveUs(h)) kind += " (admin)";
             lines.Add($"0x{h:X} {kind,-6} {ClassName(h)} \"{User32.Title(h)}\" style 0x{Style(h):X} ex 0x{ExStyle(h):X} " +
                       $"owner 0x{owner:X} root 0x{RootOwner(h):X} {f.Left},{f.Top} {f.Width}x{f.Height}");
             return true;
@@ -220,7 +222,7 @@ sealed class CanvasWindow
         return string.Join("\n", lines);
     }
 
-    static bool Belongs(nint h, uint self)
+    static bool Belongs(nint h, uint self, List<nint>? admin)
     {
         if (!IsWindowVisible(h) || IsIconic(h)) return false;
         long ex = ExStyle(h);
@@ -234,6 +236,12 @@ sealed class CanvasWindow
         if (shellClasses.Contains(ClassName(h))) return false;
         var f = Dwm.FrameBounds(h);
         if (f.Width < 40 || f.Height < 30) return false;
-        return GetWindowTextLength(h) > 0;
+        if (GetWindowTextLength(h) == 0) return false;
+        if (!Elevation.IsElevated && Elevation.AboveUs(h))
+        {
+            admin?.Add(h);
+            return false;
+        }
+        return true;
     }
 }

@@ -180,7 +180,11 @@ static ushort ScanCode(string name) => name switch
     "ctrl" => 0x1D, "alt" => 0x38, "shift" => 0x2A, "win" => 0xE05B,
     "esc" => 0x01, "grave" or "`" => 0x29, "tab" => 0x0F, "enter" => 0x1C, "space" => 0x39,
     "left" => 0xE04B, "right" => 0xE04D, "up" => 0xE048, "down" => 0xE050,
-    "t" => 0x14, "w" => 0x11, "a" => 0x1E, "0" => 0x0B, "1" => 0x02, "minus" => 0x0C, "equals" => 0x0D,
+    "0" => 0x0B, "1" => 0x02, "minus" => 0x0C, "equals" => 0x0D,
+    // Letters by their place on the keyboard (scan codes don't follow the alphabet).
+    [var c] when "qwertyuiop".IndexOf(c) is var i and >= 0 => (ushort)(0x10 + i),
+    [var c] when "asdfghjkl".IndexOf(c) is var i and >= 0 => (ushort)(0x1E + i),
+    [var c] when "zxcvbnm".IndexOf(c) is var i and >= 0 => (ushort)(0x2C + i),
     _ => throw new ArgumentException($"unknown key {name}"),
 };
 

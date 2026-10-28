@@ -106,6 +106,32 @@ public struct NOTIFYICONDATA
     public nint hBalloonIcon;
 }
 
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct SHELLEXECUTEINFO
+{
+    public int cbSize;
+    public uint fMask;
+    public nint hwnd;
+    public string? lpVerb, lpFile, lpParameters, lpDirectory;
+    public int nShow;
+    public nint hInstApp, lpIDList;
+    public string? lpClass;
+    public nint hkeyClass;
+    public uint dwHotKey;
+    public nint hIconOrMonitor, hProcess;
+}
+
+public static class Advapi32
+{
+    const string Dll = "advapi32.dll";
+    public const uint TOKEN_QUERY = 8;
+    public const int TokenIntegrityLevel = 25;
+    [DllImport(Dll, SetLastError = true)] public static extern bool OpenProcessToken(nint process, uint access, out nint token);
+    [DllImport(Dll, SetLastError = true)] public static extern bool GetTokenInformation(nint token, int infoClass, nint info, int length, out int returned);
+    [DllImport(Dll)] public static extern nint GetSidSubAuthority(nint sid, uint index);
+    [DllImport(Dll)] public static extern nint GetSidSubAuthorityCount(nint sid);
+}
+
 public delegate void WinEventProc(nint hook, uint ev, nint hwnd, int idObject, int idChild, uint thread, uint time);
 
 [StructLayout(LayoutKind.Sequential)]
@@ -424,7 +450,10 @@ public static class Dwm
 public static class Shell32
 {
     public const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIM_SETVERSION = 4;
-    public const uint NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_SHOWTIP = 0x80;
+    public const uint NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_INFO = 0x10, NIF_SHOWTIP = 0x80;
+    public const uint NIIF_INFO = 1, NIIF_RESPECT_QUIET_TIME = 0x80;
+    public const uint SEE_MASK_NOCLOSEPROCESS = 0x40, SEE_MASK_NOASYNC = 0x100;
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO info);
     public const uint NOTIFYICON_VERSION_4 = 4, NIN_SELECT = 0x400, NIN_KEYSELECT = 0x401;
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern bool Shell_NotifyIcon(uint message, ref NOTIFYICONDATA data);
 }

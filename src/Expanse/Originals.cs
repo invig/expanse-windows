@@ -58,6 +58,28 @@ static class Originals
         try { System.IO.File.Delete(File); } catch (IOException) { }
     }
 
+    /// Handed over from another Expanse: where its windows were before it moved them becomes
+    /// ours, and the file stays.
+    public static void Adopt(IEnumerable<CanvasWindow> windows)
+    {
+        if (!System.IO.File.Exists(File)) return;
+        try
+        {
+            var entries = (JsonSerializer.Deserialize<List<Entry>>(System.IO.File.ReadAllText(File)) ?? new())
+                .ToDictionary(e => (nint)e.Hwnd);
+            int n = 0;
+            foreach (var w in windows)
+            {
+                if (!entries.TryGetValue(w.Hwnd, out var e)) continue;
+                w.Original = new RECT(e.X, e.Y, e.X, e.Y);
+                if (e.Maximised) (w.Maximised, w.RestoredByUs) = (true, true);
+                n++;
+            }
+            Log.Info($"took over where {n} windows were before Expanse moved them");
+        }
+        catch (Exception e) { Log.Info($"originals: couldn't take over: {e.Message}"); }
+    }
+
     /// After a crash: the file's windows that still exist go back.
     public static void RestoreFromFile()
     {

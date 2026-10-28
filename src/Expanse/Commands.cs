@@ -21,13 +21,23 @@ sealed class CommandServer(nint overlay)
 
     public void Start() => new Thread(Loop) { IsBackground = true, Name = "commands" }.Start();
 
+    /// Run as administrator, Expanse can move and close admin windows, so only other admin
+    /// processes may drive it: otherwise any program could reach admin windows through it.
+    static NamedPipeServerStream Create()
+    {
+        if (!Elevation.IsElevated) return new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte);
+        var security = new PipeSecurity();
+        security.SetSecurityDescriptorSddlForm("D:P(A;;GA;;;SY)(A;;GA;;;BA)");
+        return NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None, 0, 0, security);
+    }
+
     void Loop()
     {
         while (true)
         {
             try
             {
-                using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte);
+                using var pipe = Create();
                 pipe.WaitForConnection();
                 var reader = new StreamReader(pipe);
                 var request = new Request(reader.ReadLine() ?? "");

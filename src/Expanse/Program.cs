@@ -11,12 +11,23 @@ if (args.Contains("--restore"))
 using var mutex = new Mutex(true, @"Local\Expanse", out bool first);
 if (!first)
 {
-    Log.Info("another Expanse is already running");
-    return 1;
+    // Another Expanse, perhaps handing over to this one (Include Admin Windows): it takes a moment.
+    try { first = mutex.WaitOne(TimeSpan.FromSeconds(10)); }
+    catch (AbandonedMutexException) { first = true; }
+    if (!first)
+    {
+        Log.Info("another Expanse is already running");
+        return 1;
+    }
 }
 
-Log.Info($"Expanse starting (pid {Environment.ProcessId})");
-Originals.RestoreFromFile();
+Log.Info($"Expanse starting (pid {Environment.ProcessId}, {(Elevation.IsElevated ? "as administrator" : "not as administrator")})");
+// Include Admin Windows is on: run as administrator (Windows asks). Nothing's been touched yet,
+// so the new one simply starts; said no, this one carries on without admin windows.
+if (Settings.Load().RunAsAdmin && !Elevation.IsElevated && Elevation.StartElevated()) return 0;
+// Handed over (see Canvas.HandOver): the windows are where the last run left them on purpose.
+// Otherwise anything in originals.json is from a crash, and those windows go back.
+if (LayoutStore.Load()?.HandOver != true) Originals.RestoreFromFile();
 
 // --pictures dwm: DWM thumbnails instead of shared visuals (which fall back to them anyway).
 int kindAt = Array.IndexOf(args, "--pictures");

@@ -159,4 +159,26 @@ backend, with 10 windows, in the same session:
      tapping Alt then lands in the window and WinUI apps show their key tips, so an accepted
      switch is given 250 ms.
 
-   Then admin windows, several monitors and mixed DPI.
+4. ~~Admin windows~~: done. Notes:
+   - **The VM had UAC off** (EnableLUA 0) from its install, so everything ran as administrator and
+     nothing was "admin". It's on now, as on a normal PC.
+   - **A normal program can't move an admin window:** SetWindowPos fails with access denied
+     (error 5), checked from a medium-integrity PowerShell. Integrity levels are read from each
+     window's process token; one that can't be read counts as above Expanse.
+   - **Run normally, Expanse leaves admin windows off the canvas** (and their dialogs), and the
+     tray icon says so once. Keeping them on the canvas would mean pictures of windows it can't
+     place, whose spots follow the camera.
+   - **Include Admin Windows** restarts Expanse as administrator (ShellExecuteEx "runas"). The two
+     hand over: the new one waits on the single-instance mutex; the old one saves the layout
+     marked `handOver` and keeps originals.json; the new one adopts it instead of treating it as a
+     crash. Going back to normal goes through Explorer (anything an elevated process starts is
+     elevated), and puts admin windows back first, so none is left parked off screen.
+   - **Run as administrator, the command pipe allows only SYSTEM and Administrators**: a
+     medium-integrity expansectl gets access denied (checked), so other programs can't reach admin
+     windows through Expanse.
+   - **Not checked end to end: switching to administrator**, from the tray or at start, which
+     shows a UAC prompt someone has to click. The hand-over back from administrator to normal was
+     tested (the elevated copy started by a scheduled task, `vm.sh start admin`); the other way
+     shares its code.
+
+5. Several monitors and mixed DPI.

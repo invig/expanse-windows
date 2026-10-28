@@ -78,6 +78,13 @@ Early days. What works so far:
   window, so when the view moves off one, Expanse makes it an ordinary window of the same size to
   move it, and maximises it again when you come back to it. Un-maximising it yourself gives you
   back your own size.
+- **Admin windows** (an admin terminal, Task Manager, an installer). Windows won't let a program
+  move the windows of one running as administrator. Run normally, Expanse leaves them off the
+  canvas, where they are, and says so once. **Include Admin Windows…** on the tray menu starts
+  Expanse again as administrator (Windows asks first, and asks each time Expanse starts while it's
+  on), taking over without moving anything. Unticking it puts admin windows back where they were
+  and starts Expanse again as you. Run as administrator, Expanse only takes `expansectl` commands
+  from admin programs.
 - **Pausing or quitting** puts every window back where it was before Expanse moved it, as does the
   next start after a crash (`Expanse.exe --restore` does it by hand).
 
@@ -138,7 +145,7 @@ the signed-in session (`scripts/guest/desk.ps1`).
 ```bash
 scripts/vm.sh setup         # once: OpenSSH with this Mac's key, the .NET 10 SDK
 scripts/vm.sh build         # sync the source over and build everything
-scripts/vm.sh start         # (re)start Expanse on the VM's desktop
+scripts/vm.sh start         # (re)start Expanse on the VM's desktop (`start admin`: as administrator)
 scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, windows, log, pause, resume, bench 5, quit
 scripts/vm.sh ctl screen 640 480   # pretend the screen is that size (no size: the real one)
 scripts/vm.sh shot          # out/shot.png: the VM's screen

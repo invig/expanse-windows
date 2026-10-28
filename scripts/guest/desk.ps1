@@ -2,14 +2,18 @@
 # (which can't show windows or touch the desktop itself). It goes through a scheduled task
 # with an interactive logon, not elevated, at normal priority.
 #
-#   desk.ps1 -Exe PATH [-Arguments "..."] [-Name TASK] [-Wait SECONDS]
+#   desk.ps1 -Exe PATH [-Arguments "..."] [-Name TASK] [-Wait SECONDS] [-Elevated]
+#
+# -Elevated runs it as administrator (with UAC on, elevated without a prompt: a task's
+# "highest privileges"), for testing admin windows.
 #
 # With -Wait it waits for the program to finish and exits with its exit code.
 param(
     [Parameter(Mandatory)][string]$Exe,
     [string]$Arguments = '',
     [string]$Name = 'ExpanseDesk',
-    [int]$Wait = 0
+    [int]$Wait = 0,
+    [switch]$Elevated
 )
 $ErrorActionPreference = 'Stop'
 
@@ -20,7 +24,7 @@ $exePath = (Resolve-Path $Exe).Path
 $actionArgs = @{ Execute = $exePath; WorkingDirectory = (Split-Path $exePath) }
 if ($Arguments) { $actionArgs.Argument = $Arguments }
 $action = New-ScheduledTaskAction @actionArgs
-$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel $(if ($Elevated) { 'Highest' } else { 'Limited' })
 # Priority 4 is normal; scheduled tasks default to 7 (below normal), which skews timing.
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel -Priority 4

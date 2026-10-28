@@ -49,6 +49,17 @@ sealed class Tray : IDisposable
         Shell32.Shell_NotifyIcon(Shell32.NIM_MODIFY, ref data);
     }
 
+    /// A notification from the icon (shown as a toast), unless you're in Focus or Do Not Disturb.
+    public void Notify(string title, string text)
+    {
+        var data = Data(Shell32.NIF_INFO);
+        data.szInfoTitle = title;
+        data.szInfo = text;
+        data.dwInfoFlags = Shell32.NIIF_INFO | Shell32.NIIF_RESPECT_QUIET_TIME;
+        bool shown = Shell32.Shell_NotifyIcon(Shell32.NIM_MODIFY, ref data);
+        Log.Info($"tray notification \"{title}\": {(shown ? "sent" : "refused")}");
+    }
+
     /// The taskbar switched between light and dark.
     public void ThemeChanged()
     {
@@ -60,13 +71,17 @@ sealed class Tray : IDisposable
     }
 
     /// Our WM_TRAY callback (NOTIFYICON_VERSION_4: the event in lParam's low word, the anchor
-    /// point in wParam). Left click runs `click`; right click (or Shift+F10) shows `menu()`.
+    /// point in wParam). Left click runs `click`; right click (or Shift+F10), or a click on a
+    /// notification, shows `menu()`.
     public void Handle(nint wParam, nint lParam, Action click, Func<IReadOnlyList<Item?>> menu)
     {
         uint ev = (uint)(lParam & 0xFFFF);
         if (ev == Shell32.NIN_SELECT || ev == Shell32.NIN_KEYSELECT) click();
         else if (ev == WM_CONTEXTMENU) ShowMenu((short)(wParam & 0xFFFF), (short)((wParam >> 16) & 0xFFFF), menu());
+        else if (ev == NIN_BALLOONUSERCLICK && GetCursorPos(out var p)) ShowMenu(p.X, p.Y, menu());
     }
+
+    const uint NIN_BALLOONUSERCLICK = 0x405;
 
     /// `null` items are separators; items with Children open a submenu.
     void ShowMenu(int x, int y, IReadOnlyList<Item?> items)

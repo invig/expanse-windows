@@ -18,6 +18,12 @@ catch (TimeoutException)
     Console.Error.WriteLine("Expanse isn't running (no " + pipeName + " pipe)");
     return 1;
 }
+catch (UnauthorizedAccessException)
+{
+    // Run as administrator, Expanse only takes commands from admin processes.
+    Console.Error.WriteLine("Expanse is running as administrator: run expansectl as administrator too");
+    return 1;
+}
 var writer = new StreamWriter(pipe) { AutoFlush = true };
 writer.WriteLine(string.Join(' ', args));
 Console.Write(new StreamReader(pipe).ReadToEnd());

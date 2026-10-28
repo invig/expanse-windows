@@ -5,7 +5,7 @@
 #   scripts/vm.sh sync             copy the source to %USERPROFILE%\expanse-windows in the VM
 #   scripts/vm.sh build [PROJ...]  sync and build (default: every project under src/)
 #   scripts/vm.sh test             sync and run the layout maths' tests (src/Layout.Tests)
-#   scripts/vm.sh start            (re)start Expanse on the VM's desktop
+#   scripts/vm.sh start [admin]    (re)start Expanse on the VM's desktop (as administrator)
 #   scripts/vm.sh stop             quit Expanse (every window goes back where it was)
 #   scripts/vm.sh ctl CMD...       expansectl: state, zoomout, pick TITLE, back, bench S, log...
 #   scripts/vm.sh desk EXE [ARGS]  run a program on the VM's desktop (EXE in the VM's terms)
@@ -84,8 +84,10 @@ desk() {
   ssh_vm "powershell -NoProfile -ExecutionPolicy Bypass -File $REPO\\scripts\\guest\\desk.ps1 -Exe \"$exe\" $*"
 }
 
+# GUEST_ADMIN=1: the helper runs as administrator (to click an Expanse that is: Windows drops
+# input from a normal program to an admin one).
 guest() {
-  desk "$(exe Guest Guest)" -Arguments "\"$*\"" -Name ExpanseGuest -Wait 60 ||
+  desk "$(exe Guest Guest)" -Arguments "\"$*\"" -Name ExpanseGuest -Wait 60 ${GUEST_ADMIN:+-Elevated} ||
     { ssh_vm "type $REPO\\out\\guest.log" | tail -5; exit 1; }
 }
 
@@ -106,9 +108,9 @@ case ${1:-} in
     sync
     ssh_vm "cd $REPO && dotnet run --project src\\Layout.Tests -c Debug -v q"
     ;;
-  start)
+  start) # `start admin`: as administrator
     stop
-    desk "$(exe Expanse Expanse)" -Name ExpanseApp
+    desk "$(exe Expanse Expanse)" -Name ExpanseApp ${2:+-Elevated}
     sleep 2
     ctl state | head -12
     ;;
