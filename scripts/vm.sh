@@ -96,6 +96,7 @@ case ${1:-} in
     projects=${*:-Expanse Ctl Guest Spikes}
     sync
     stop
+    case " $projects " in *" Spikes "*) ssh_vm 'taskkill /im Spikes.exe /f >nul 2>&1 & exit 0' ;; esac
     cmd="cd $REPO"
     for p in $projects; do cmd="$cmd && dotnet build src\\$p -c Debug -nologo -v q -clp:NoSummary"; done
     ssh_vm "$cmd"

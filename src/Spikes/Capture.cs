@@ -168,9 +168,11 @@ static class Capture
         Thread.Sleep(8000);
 
         var subjects = new List<(string name, CanvasWindow w)>();
-        foreach (var w in ScanWindows(monitor))
+        var all = ScanWindows(monitor);
+        Out.Log($"parking: windows {string.Join("; ", all.Select(w => $"{w} class {w.Class}"))}");
+        foreach (var w in all)
         {
-            string? name = w.Class == "CASCADIA_HOSTING_WINDOW_CLASS" ? "Windows Terminal"
+            string? name = w.App == "WindowsTerminal" ? "Windows Terminal"
                 : w.Class == "CabinetWClass" && w.Title.Contains("parking") ? "File Explorer"
                 : w.Title.Contains("Expanse tick") && w.App == "msedge" ? "Edge (Chromium)"
                 : w.Title.Contains("tick.txt") && w.App == "Code" ? "VS Code (Electron)"
@@ -256,7 +258,7 @@ static class Capture
 
         string churn = Path.Combine(folder, "parking");
         Directory.CreateDirectory(churn);
-        Start("explorer.exe", $"\"{churn}\"");
+        Start("explorer.exe", $"/n,\"{churn}\"");
         Start("notepad.exe", "");
         Start(Environment.ProcessPath!, "sources 1");
 

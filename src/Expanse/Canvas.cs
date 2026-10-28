@@ -41,7 +41,6 @@ sealed class Canvas
         public int Frames;
         public long FirstFrame, LastFrame;
         public double MaxGap, LayoutTotal;
-        public ulong DwmFrames, DwmRefreshes;
     }
 
     public Canvas(Overlay overlay)
@@ -155,6 +154,7 @@ sealed class Canvas
         pictures.Attach(windows);
         pictures.Layout(windows, camera, View);
         overlay.Show(monitor, activate: zoomOut);
+        Lift();
         if (zoomOut)
         {
             lastOverlayFocus = Focus(overlay.Hwnd);
@@ -162,6 +162,31 @@ sealed class Canvas
             returnCamera = camera;
             Animate(OverviewCamera(), 0.22);
         }
+    }
+
+    /// GDI-drawn apps (classic Win32, Explorer's file list) only paint the parts of a window
+    /// that are on a screen, so a window parked off-screen keeps a stale picture, or none if it
+    /// was never on screen. While the overlay covers the screen, every window comes onto it,
+    /// underneath, and paints; the hand-back puts each where the camera says.
+    void Lift()
+    {
+        int lifted = 0;
+        bool newOriginals = false;
+        foreach (var w in windows)
+        {
+            GetWindowRect(w.Hwnd, out var r);
+            int fx = r.Left + w.Insets.Left, fy = r.Top + w.Insets.Top;
+            int fw = r.Width - w.Insets.Left - w.Insets.Right, fh = r.Height - w.Insets.Top - w.Insets.Bottom;
+            int x = Math.Clamp(fx, monitor.Left, Math.Max(monitor.Left, monitor.Right - fw));
+            int y = Math.Clamp(fy, monitor.Top, Math.Max(monitor.Top, monitor.Bottom - fh));
+            if (x == fx && y == fy) continue;
+            if (w.Original == null) { w.Original = r; newOriginals = true; }
+            SetWindowPos(w.Hwnd, 0, x - w.Insets.Left, y - w.Insets.Top, 0, 0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+            lifted++;
+        }
+        if (newOriginals) Originals.Save(windows);
+        if (lifted > 0) Log.Info($"lifted {lifted} off-screen windows under the overlay");
     }
 
     /// Back to 100%: on `focus` (centred in the work area), or where you were.
@@ -264,18 +289,33 @@ sealed class Canvas
     /// AttachThreadInput. Returns which step worked, for the log and the spike write-up.
     static string Focus(nint hwnd)
     {
-        if (SetForegroundWindow(hwnd) && GetForegroundWindow() == hwnd) return "direct";
-        var steps = "direct refused";
+        nint before = GetForegroundWindow();
+        string from = before == 0 ? "nothing" : $"\"{Title(before)}\"";
+        bool returned = SetForegroundWindow(hwnd);
+        if (IsForeground(hwnd)) return $"direct (from {from})";
+        var steps = $"direct refused (returned {returned}, from {from})";
         TapAlt();
-        if (SetForegroundWindow(hwnd) && GetForegroundWindow() == hwnd) return steps + ", ok after Alt tap";
-        steps += ", Alt tap refused";
+        returned = SetForegroundWindow(hwnd);
+        if (IsForeground(hwnd)) return steps + ", ok after Alt tap";
+        steps += $", Alt tap refused (returned {returned})";
         uint fg = GetWindowThreadProcessId(GetForegroundWindow(), out _);
         uint me = Kernel32.GetCurrentThreadId();
         bool attached = fg != me && AttachThreadInput(me, fg, true);
         BringWindowToTop(hwnd);
         SetForegroundWindow(hwnd);
         if (attached) AttachThreadInput(me, fg, false);
-        return steps + (GetForegroundWindow() == hwnd ? ", ok with AttachThreadInput" : ", AttachThreadInput refused");
+        return steps + (IsForeground(hwnd) ? ", ok with AttachThreadInput" : ", AttachThreadInput refused");
+    }
+
+    /// The switch can take a moment to show up for another thread's window.
+    static bool IsForeground(nint hwnd)
+    {
+        for (int i = 0; i < 5; i++)
+        {
+            if (GetForegroundWindow() == hwnd) return true;
+            Thread.Sleep(10);
+        }
+        return false;
     }
 
     static void TapAlt()
@@ -314,11 +354,9 @@ sealed class Canvas
 
     void Animate(Camera to, double duration, Action? completion = null)
     {
-        var timing = DwmTiming();
         animation = new Animation
         {
             From = camera, To = to, Start = Stopwatch.GetTimestamp(), Duration = duration, Completion = completion,
-            DwmFrames = timing.cFrame, DwmRefreshes = timing.cRefresh,
         };
         overlay.Repaint(); // labels and the hover ring off while moving
     }
@@ -351,10 +389,8 @@ sealed class Canvas
         bench?.Layouts.Add(layout);
         if (t < 1) return;
 
-        var timing = DwmTiming();
         lastAnimation = $"{a.Frames} frames in {Ms(a.Start):0}ms, first after {Stopwatch.GetElapsedTime(a.Start, a.FirstFrame).TotalMilliseconds:0}ms, " +
-                        $"max gap {a.MaxGap:0}ms, layout {a.LayoutTotal / a.Frames:0.00}ms/frame, " +
-                        $"DWM composed {timing.cFrame - a.DwmFrames} frames over {timing.cRefresh - a.DwmRefreshes} refreshes";
+                        $"max gap {a.MaxGap:0}ms, layout {a.LayoutTotal / a.Frames:0.00}ms/frame";
         if (bench == null) Log.Info($"animation: {lastAnimation}");
         animation = null;
         a.Completion?.Invoke();
@@ -367,13 +403,6 @@ sealed class Canvas
 
     static double Lerp(double a, double b, double t) => a + (b - a) * t;
     static double Ms(long since) => Stopwatch.GetElapsedTime(since).TotalMilliseconds;
-
-    static DWM_TIMING_INFO DwmTiming()
-    {
-        var info = new DWM_TIMING_INFO { cbSize = (uint)Marshal.SizeOf<DWM_TIMING_INFO>() };
-        Dwm.DwmGetCompositionTimingInfo(0, ref info);
-        return info;
-    }
 
     // MARK: Input
 
@@ -412,6 +441,9 @@ sealed class Canvas
             case WM_KEYDOWN:
                 if ((int)wParam == VK_ESCAPE) Exit(null);
                 return 0;
+            case WM_SYSCOMMAND when (wParam & 0xFFF0) == SC_KEYMENU:
+                return 0; // Alt (ours, from the focus fallback, or the user's) mustn't enter menu mode
+
             case WM_DISPLAYCHANGE:
                 (monitor, work) = PrimaryMonitor();
                 Log.Info($"display changed: screen {monitor}, work area {work}");
@@ -454,10 +486,14 @@ sealed class Canvas
         nint oldBrush = Gdi32.SelectObject(hdc, pill);
         Gdi32.SetBkMode(hdc, Gdi32.TRANSPARENT);
         Gdi32.SetTextColor(hdc, Gdi32.RGB(240, 240, 240));
-        foreach (var w in windows)
+        for (int i = 0; i < windows.Count; i++)
         {
+            var w = windows[i];
             var r = camera.ToView(w.Frame);
             if (r.W < 80 || !r.Intersects(View)) continue;
+            // No label for a window whose top is under one in front: it would sit on that one's.
+            var top = new Vec(r.X + r.W / 2, r.Y + 1);
+            if (windows.Skip(i + 1).Any(f => camera.ToView(f.Frame).Contains(top))) continue;
             var measure = new RECT(0, 0, 4000, 100);
             DrawText(hdc, w.Title, -1, ref measure, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
             int pad = (int)(10 * k), h = (int)(22 * k);
@@ -516,13 +552,17 @@ sealed class Canvas
                 request.Reply(State());
                 break;
             }
+            case "close":
+                if (Find(arg) is CanvasWindow c) { PostMessage(c.Hwnd, WM_CLOSE, 0, 0); request.Reply($"closing {c}"); }
+                else request.Reply($"no window matches \"{arg}\"");
+                break;
             case "bench": StartBench(request, double.TryParse(arg, out double secs) ? secs : 5); break;
             case "quit":
                 request.Reply("bye");
                 Quit();
                 break;
             default:
-                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, view X Y SCALE, bench [SECONDS], quit");
+                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, bench [SECONDS], quit");
                 break;
         }
     }
@@ -583,7 +623,6 @@ sealed class Canvas
         public required Request Request;
         public long Start, Deadline;
         public readonly List<double> Gaps = new(), Layouts = new();
-        public ulong DwmFrames, DwmRefreshes;
         public TimeSpan Cpu;
         public TimeSpan? DwmCpu;
     }
@@ -593,12 +632,10 @@ sealed class Canvas
     void StartBench(Request request, double seconds)
     {
         if (!active || gliding) { request.Reply("zoom out first"); return; }
-        var timing = DwmTiming();
         bench = new Bench
         {
             Request = request, Start = Stopwatch.GetTimestamp(),
             Deadline = Stopwatch.GetTimestamp() + (long)(seconds * Stopwatch.Frequency),
-            DwmFrames = timing.cFrame, DwmRefreshes = timing.cRefresh,
             Cpu = Process.GetCurrentProcess().TotalProcessorTime, DwmCpu = DwmCpuTime(),
         };
         var overview = OverviewCamera();
@@ -615,7 +652,6 @@ sealed class Canvas
     {
         var b = bench!;
         bench = null;
-        var timing = DwmTiming();
         double wall = Ms(b.Start);
         var gaps = b.Gaps.Order().ToList();
         double P(double q) => gaps.Count == 0 ? 0 : gaps[Math.Min(gaps.Count - 1, (int)(q * gaps.Count))];
@@ -629,9 +665,6 @@ sealed class Canvas
             fps = (b.Gaps.Count + 1) / (wall / 1000),
             gapMs = new { p50 = P(0.5), p95 = P(0.95), p99 = P(0.99), max = gaps.LastOrDefault() },
             layoutMs = new { avg = b.Layouts.DefaultIfEmpty().Average(), max = b.Layouts.DefaultIfEmpty().Max() },
-            dwmComposed = timing.cFrame - b.DwmFrames,
-            dwmRefreshes = timing.cRefresh - b.DwmRefreshes,
-            refreshHz = timing.rateRefreshDen == 0 ? 0 : (double)timing.rateRefreshNum / timing.rateRefreshDen,
             cpuPercentOneCore = (Process.GetCurrentProcess().TotalProcessorTime - b.Cpu).TotalMilliseconds / wall * 100,
             dwmCpuPercentOneCore = b.DwmCpu is TimeSpan d0 && dwmCpu is TimeSpan d1 ? (d1 - d0).TotalMilliseconds / wall * 100 : (double?)null,
         }, new JsonSerializerOptions { WriteIndented = true }));

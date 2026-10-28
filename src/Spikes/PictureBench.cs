@@ -100,7 +100,6 @@ static class PictureBench
 
         var gaps = new List<double>();
         var layouts = new List<double>();
-        var t0 = DwmTiming();
         var cpu0 = Process.GetCurrentProcess().TotalProcessorTime;
         var dwm0 = DwmCpu();
         long start = Stopwatch.GetTimestamp(), last = start;
@@ -125,7 +124,6 @@ static class PictureBench
             last = now;
         }
         double wall = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-        var t1 = DwmTiming();
         var cpu1 = Process.GetCurrentProcess().TotalProcessorTime;
         var dwm1 = DwmCpu();
         gaps.Sort();
@@ -139,9 +137,6 @@ static class PictureBench
             fps = gaps.Count / (wall / 1000),
             gapMs = new { p50 = Out.Percentile(gaps, 0.5), p95 = Out.Percentile(gaps, 0.95), p99 = Out.Percentile(gaps, 0.99), max = gaps.LastOrDefault() },
             layoutMs = new { avg = layouts.DefaultIfEmpty().Average(), max = layouts.DefaultIfEmpty().Max() },
-            dwmComposed = t1.cFrame - t0.cFrame,
-            dwmRefreshes = t1.cRefresh - t0.cRefresh,
-            refreshHz = t1.rateRefreshDen == 0 ? 0 : (double)t1.rateRefreshNum / t1.rateRefreshDen,
             cpuPercentOneCore = (cpu1 - cpu0).TotalMilliseconds / wall * 100,
             dwmCpuPercentOneCore = dwm0 is TimeSpan a && dwm1 is TimeSpan b ? (b - a).TotalMilliseconds / wall * 100 : (double?)null,
         });
@@ -170,13 +165,6 @@ static class PictureBench
             TranslateMessage(ref m);
             DispatchMessage(ref m);
         }
-    }
-
-    internal static DWM_TIMING_INFO DwmTiming()
-    {
-        var info = new DWM_TIMING_INFO { cbSize = (uint)Marshal.SizeOf<DWM_TIMING_INFO>() };
-        Dwm.DwmGetCompositionTimingInfo(0, ref info);
-        return info;
     }
 
     internal static TimeSpan? DwmCpu()

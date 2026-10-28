@@ -131,52 +131,8 @@ public struct DWM_THUMBNAIL_PROPERTIES
     public int fSourceClientAreaOnly;
 }
 
-// dwmapi.h packs this to 1 byte. Only cFrame/cRefresh/rates are read.
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct DWM_TIMING_INFO
-{
-    public uint cbSize;
-    public uint rateRefreshNum, rateRefreshDen;
-    public ulong qpcRefreshPeriod;
-    public uint rateComposeNum, rateComposeDen;
-    public ulong qpcVBlank;
-    public ulong cRefresh;
-    public uint cDXRefresh;
-    public ulong qpcCompose;
-    public ulong cFrame;
-    public uint cDXPresent;
-    public ulong cRefreshFrame;
-    public ulong cFrameSubmitted;
-    public uint cDXPresentSubmitted;
-    public ulong cFrameConfirmed;
-    public uint cDXPresentConfirmed;
-    public ulong cRefreshConfirmed;
-    public uint cDXRefreshConfirmed;
-    public ulong cFramesLate;
-    public uint cFramesOutstanding;
-    public ulong cFrameDisplayed;
-    public ulong qpcFrameDisplayed;
-    public ulong cRefreshFrameDisplayed;
-    public ulong cFrameComplete;
-    public ulong qpcFrameComplete;
-    public ulong cFramePending;
-    public ulong qpcFramePending;
-    public ulong cFramesDisplayed;
-    public ulong cFramesComplete;
-    public ulong cFramesPending;
-    public ulong cFramesAvailable;
-    public ulong cFramesDropped;
-    public ulong cFramesMissed;
-    public ulong cRefreshNextDisplayed;
-    public ulong cRefreshNextPresented;
-    public ulong cRefreshesDisplayed;
-    public ulong cRefreshesPresented;
-    public ulong cRefreshStarted;
-    public ulong cPixelsReceived;
-    public ulong cPixelsDrawn;
-    public ulong cBuffersEmpty;
-}
-
+// CharSet.Unicode throughout: DefWindowProc, GetMessage, DispatchMessage and friends must be the
+// W versions for Unicode windows (the A ones truncate titles to their first letter).
 public static class User32
 {
     const string Dll = "user32.dll";
@@ -201,7 +157,8 @@ public static class User32
         WM_SETCURSOR = 0x20, WM_MOUSEACTIVATE = 0x21, WM_KEYDOWN = 0x100, WM_SYSKEYDOWN = 0x104, WM_TIMER = 0x113,
         WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204,
         WM_MOUSEWHEEL = 0x20A, WM_HOTKEY = 0x312, WM_DISPLAYCHANGE = 0x7E, WM_DPICHANGED = 0x2E0,
-        WM_NCHITTEST = 0x84, WM_ACTIVATE = 0x6, WM_APP = 0x8000;
+        WM_NCHITTEST = 0x84, WM_ACTIVATE = 0x6, WM_SYSCOMMAND = 0x112, WM_APP = 0x8000;
+    public const int SC_KEYMENU = 0xF100;
     public const int MA_ACTIVATE = 1, MA_NOACTIVATE = 3;
 
     public const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8, MOD_NOREPEAT = 0x4000;
@@ -224,84 +181,84 @@ public static class User32
 
     public static readonly nint DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4;
 
-    [DllImport(Dll)] public static extern bool EnumWindows(EnumWindowsProc cb, nint lParam);
-    [DllImport(Dll)] public static extern bool IsWindow(nint hwnd);
-    [DllImport(Dll)] public static extern bool IsWindowVisible(nint hwnd);
-    [DllImport(Dll)] public static extern bool IsIconic(nint hwnd);
-    [DllImport(Dll)] public static extern bool IsZoomed(nint hwnd);
-    [DllImport(Dll)] public static extern bool IsHungAppWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool EnumWindows(EnumWindowsProc cb, nint lParam);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool IsWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool IsWindowVisible(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool IsIconic(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool IsZoomed(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool IsHungAppWindow(nint hwnd);
     [DllImport(Dll, EntryPoint = "GetWindowLongPtrW")] public static extern nint GetWindowLongPtr(nint hwnd, int index);
     [DllImport(Dll, EntryPoint = "SetWindowLongPtrW")] public static extern nint SetWindowLongPtr(nint hwnd, int index, nint value);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetWindowTextLength(nint hwnd);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetWindowText(nint hwnd, StringBuilder sb, int max);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetClassName(nint hwnd, StringBuilder sb, int max);
-    [DllImport(Dll)] public static extern bool GetWindowRect(nint hwnd, out RECT r);
-    [DllImport(Dll)] public static extern bool GetClientRect(nint hwnd, out RECT r);
-    [DllImport(Dll)] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
-    [DllImport(Dll)] public static extern nint GetAncestor(nint hwnd, uint flags);
-    [DllImport(Dll)] public static extern nint GetWindow(nint hwnd, uint cmd);
-    [DllImport(Dll)] public static extern nint GetLastActivePopup(nint hwnd);
-    [DllImport(Dll)] public static extern bool SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
-    [DllImport(Dll)] public static extern bool GetWindowPlacement(nint hwnd, ref WINDOWPLACEMENT wp);
-    [DllImport(Dll)] public static extern bool SetWindowPlacement(nint hwnd, ref WINDOWPLACEMENT wp);
-    [DllImport(Dll)] public static extern bool ShowWindow(nint hwnd, int cmd);
-    [DllImport(Dll)] public static extern bool SetForegroundWindow(nint hwnd);
-    [DllImport(Dll)] public static extern nint GetForegroundWindow();
-    [DllImport(Dll)] public static extern bool BringWindowToTop(nint hwnd);
-    [DllImport(Dll)] public static extern nint SetActiveWindow(nint hwnd);
-    [DllImport(Dll)] public static extern nint SetFocus(nint hwnd);
-    [DllImport(Dll)] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
-    [DllImport(Dll)] public static extern bool AllowSetForegroundWindow(int pid);
-    [DllImport(Dll)] public static extern bool LockSetForegroundWindow(uint code);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetWindowRect(nint hwnd, out RECT r);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetClientRect(nint hwnd, out RECT r);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetAncestor(nint hwnd, uint flags);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetWindow(nint hwnd, uint cmd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetLastActivePopup(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetWindowPlacement(nint hwnd, ref WINDOWPLACEMENT wp);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetWindowPlacement(nint hwnd, ref WINDOWPLACEMENT wp);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool ShowWindow(nint hwnd, int cmd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetForegroundWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetForegroundWindow();
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool BringWindowToTop(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetActiveWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetFocus(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool LockSetForegroundWindow(uint code);
 
     [DllImport(Dll, CharSet = CharSet.Unicode, SetLastError = true)] public static extern ushort RegisterClassEx(ref WNDCLASSEX wc);
     [DllImport(Dll, CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern nint CreateWindowEx(uint exStyle, string className, string? title, uint style,
         int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
-    [DllImport(Dll)] public static extern nint DefWindowProc(nint hwnd, uint msg, nint wParam, nint lParam);
-    [DllImport(Dll)] public static extern bool DestroyWindow(nint hwnd);
-    [DllImport(Dll)] public static extern int GetMessage(out MSG msg, nint hwnd, uint min, uint max);
-    [DllImport(Dll)] public static extern bool PeekMessage(out MSG msg, nint hwnd, uint min, uint max, uint remove);
-    [DllImport(Dll)] public static extern bool TranslateMessage(ref MSG msg);
-    [DllImport(Dll)] public static extern nint DispatchMessage(ref MSG msg);
-    [DllImport(Dll)] public static extern bool PostMessage(nint hwnd, uint msg, nint wParam, nint lParam);
-    [DllImport(Dll)] public static extern nint SendMessage(nint hwnd, uint msg, nint wParam, nint lParam);
-    [DllImport(Dll)] public static extern bool PostThreadMessage(uint thread, uint msg, nint wParam, nint lParam);
-    [DllImport(Dll)] public static extern void PostQuitMessage(int code);
-    [DllImport(Dll)] public static extern nint SetTimer(nint hwnd, nint id, uint ms, nint proc);
-    [DllImport(Dll)] public static extern bool KillTimer(nint hwnd, nint id);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint DefWindowProc(nint hwnd, uint msg, nint wParam, nint lParam);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool DestroyWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetMessage(out MSG msg, nint hwnd, uint min, uint max);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool PeekMessage(out MSG msg, nint hwnd, uint min, uint max, uint remove);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool TranslateMessage(ref MSG msg);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint DispatchMessage(ref MSG msg);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool PostMessage(nint hwnd, uint msg, nint wParam, nint lParam);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SendMessage(nint hwnd, uint msg, nint wParam, nint lParam);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool PostThreadMessage(uint thread, uint msg, nint wParam, nint lParam);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern void PostQuitMessage(int code);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetTimer(nint hwnd, nint id, uint ms, nint proc);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool KillTimer(nint hwnd, nint id);
 
-    [DllImport(Dll)] public static extern bool RegisterHotKey(nint hwnd, int id, uint mods, uint vk);
-    [DllImport(Dll)] public static extern bool UnregisterHotKey(nint hwnd, int id);
-    [DllImport(Dll)] public static extern uint MapVirtualKey(uint code, uint type);
-    [DllImport(Dll)] public static extern short GetAsyncKeyState(int vk);
-    [DllImport(Dll, SetLastError = true)] public static extern uint SendInput(uint count, INPUT[] inputs, int size);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool RegisterHotKey(nint hwnd, int id, uint mods, uint vk);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool UnregisterHotKey(nint hwnd, int id);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint MapVirtualKey(uint code, uint type);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern short GetAsyncKeyState(int vk);
+    [DllImport(Dll, CharSet = CharSet.Unicode, SetLastError = true)] public static extern uint SendInput(uint count, INPUT[] inputs, int size);
 
-    [DllImport(Dll)] public static extern nint MonitorFromPoint(POINT p, uint flags);
-    [DllImport(Dll)] public static extern nint MonitorFromWindow(nint hwnd, uint flags);
-    [DllImport(Dll)] public static extern bool GetMonitorInfo(nint monitor, ref MONITORINFO mi);
-    [DllImport(Dll)] public static extern int GetSystemMetrics(int index);
-    [DllImport(Dll)] public static extern bool SetProcessDpiAwarenessContext(nint ctx);
-    [DllImport(Dll)] public static extern bool GetCursorPos(out POINT p);
-    [DllImport(Dll)] public static extern bool SetCursorPos(int x, int y);
-    [DllImport(Dll)] public static extern nint LoadCursor(nint instance, nint name);
-    [DllImport(Dll)] public static extern nint SetCursor(nint cursor);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint MonitorFromPoint(POINT p, uint flags);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint MonitorFromWindow(nint hwnd, uint flags);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfo(nint monitor, ref MONITORINFO mi);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetSystemMetrics(int index);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetProcessDpiAwarenessContext(nint ctx);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetCursorPos(out POINT p);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetCursorPos(int x, int y);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint LoadCursor(nint instance, nint name);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetCursor(nint cursor);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SystemParametersInfo(uint action, uint param, StringBuilder sb, uint winIni);
-    [DllImport(Dll)] public static extern bool SetLayeredWindowAttributes(nint hwnd, uint key, byte alpha, uint flags);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetLayeredWindowAttributes(nint hwnd, uint key, byte alpha, uint flags);
 
-    [DllImport(Dll)] public static extern bool InvalidateRect(nint hwnd, nint rect, bool erase);
-    [DllImport(Dll)] public static extern bool UpdateWindow(nint hwnd);
-    [DllImport(Dll)] public static extern nint BeginPaint(nint hwnd, out PAINTSTRUCT ps);
-    [DllImport(Dll)] public static extern bool EndPaint(nint hwnd, ref PAINTSTRUCT ps);
-    [DllImport(Dll)] public static extern nint GetDC(nint hwnd);
-    [DllImport(Dll)] public static extern int ReleaseDC(nint hwnd, nint hdc);
-    [DllImport(Dll)] public static extern int FillRect(nint hdc, ref RECT r, nint brush);
-    [DllImport(Dll)] public static extern int FrameRect(nint hdc, ref RECT r, nint brush);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool InvalidateRect(nint hwnd, nint rect, bool erase);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool UpdateWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint BeginPaint(nint hwnd, out PAINTSTRUCT ps);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool EndPaint(nint hwnd, ref PAINTSTRUCT ps);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetDC(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int ReleaseDC(nint hwnd, nint hdc);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int FillRect(nint hdc, ref RECT r, nint brush);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int FrameRect(nint hdc, ref RECT r, nint brush);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int DrawText(nint hdc, string text, int len, ref RECT r, uint format);
 
     public const uint DT_CENTER = 0x1, DT_VCENTER = 0x4, DT_SINGLELINE = 0x20, DT_CALCRECT = 0x400,
         DT_END_ELLIPSIS = 0x8000, DT_NOPREFIX = 0x800;
-    [DllImport(Dll)] public static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetDpiForWindow(nint hwnd);
 
     public static long Style(nint hwnd) => GetWindowLongPtr(hwnd, GWL_STYLE);
     public static long ExStyle(nint hwnd) => GetWindowLongPtr(hwnd, GWL_EXSTYLE);
@@ -391,7 +348,6 @@ public static class Dwm
     [DllImport(Dll)] public static extern int DwmGetWindowAttribute(nint hwnd, int attr, out int value, int size);
     [DllImport(Dll)] public static extern int DwmSetWindowAttribute(nint hwnd, int attr, ref int value, int size);
     [DllImport(Dll)] public static extern int DwmFlush();
-    [DllImport(Dll)] public static extern int DwmGetCompositionTimingInfo(nint hwnd, ref DWM_TIMING_INFO info);
 
     public static bool IsCloaked(nint hwnd) =>
         DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int c, sizeof(int)) == 0 && c != 0;

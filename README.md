@@ -4,6 +4,8 @@ A Windows port of [Expanse](https://github.com/invig/expanse), the infinite-canv
 manager: every window has its own place on one endless desktop; zoom out to see them all, click
 one to glide straight to it.
 
+<p align="center"><img src="docs/images/milestone-zoomed-out.jpg" alt="Zoomed out: every window live on the canvas" width="720"></p>
+
 Early days. What works so far:
 
 - **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
@@ -28,6 +30,9 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
 - **Zoomed out** a full-screen, topmost overlay rises with a DWM thumbnail of every window, first
   exactly over the real windows, then animated out (ease-out cubic, 0.22 s; scale interpolated in log
   space, as on the Mac).
+- **Off-screen windows come on-screen underneath the overlay** while it's up. GDI-drawn apps
+  (classic Win32, Explorer's file list) only paint the parts of a window that are on a screen, so
+  parked ones would otherwise show stale or empty pictures.
 - **Clicking one** animates the camera to it (0.18 s), then moves every real window once
   (`SetWindowPos`, asynchronous so a hung app can't stall it), waits for the ones in view to land,
   focuses the window and drops the overlay.
