@@ -51,20 +51,29 @@ AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 uint vk = MapVirtualKey(0x29, MAPVK_VSC_TO_VK);
 bool hotkey = RegisterHotKey(overlay.Hwnd, Canvas.HotkeyCanvas, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk);
 Log.Info(hotkey ? $"hotkey Ctrl+Alt+VK 0x{vk:X2}" : "couldn't register Ctrl+Alt+`: something else has it");
+if (!hotkey) canvas.ShortcutProblems.Add("Ctrl + Alt + ` is taken by another app: zoom out with the hot corner or the tray icon instead.");
 // Hops: Ctrl+Alt+arrows (Ctrl+arrows is word-jump everywhere, Win+arrows is Snap).
 foreach (var (id, key, name) in new[] { (Canvas.HotkeyLeft, VK_LEFT, "Left"), (Canvas.HotkeyRight, VK_RIGHT, "Right"),
                                          (Canvas.HotkeyUp, VK_UP, "Up"), (Canvas.HotkeyDown, VK_DOWN, "Down") })
     if (!RegisterHotKey(overlay.Hwnd, id, MOD_CONTROL | MOD_ALT, (uint)key))
+    {
         Log.Info($"couldn't register Ctrl+Alt+{name}: something else has it");
+        canvas.ShortcutProblems.Add($"Ctrl + Alt + {name} is taken by another app (some graphics drivers use it to rotate the screen): " +
+            "turn that off in its settings for hops that way.");
+    }
 // Ctrl+Alt+C centres the window you're in (the Mac's ⌃⌥C); Ctrl+Alt+Shift+` turns auto-centring on
 // or off (⌥⇧`).
 if (!RegisterHotKey(overlay.Hwnd, Canvas.HotkeyCentre, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)VK_C))
+{
     Log.Info("couldn't register Ctrl+Alt+C: something else has it");
+    canvas.ShortcutProblems.Add("Ctrl + Alt + C is taken by another app: centre a window from the tray icon instead.");
+}
 if (!RegisterHotKey(overlay.Hwnd, Canvas.HotkeyAutoCentre, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk))
     Log.Info("couldn't register Ctrl+Alt+Shift+`: something else has it");
 
 new CommandServer(overlay.Hwnd).Start();
 canvas.Start();
+canvas.WelcomeIfNew();
 
 // The message loop. While the camera animates it runs a frame at a time: handle whatever
 // input is waiting, move the pictures, then wait for DWM to compose (DwmFlush).

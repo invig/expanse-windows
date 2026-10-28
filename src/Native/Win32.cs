@@ -352,7 +352,7 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int FrameRect(nint hdc, ref RECT r, nint brush);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int DrawText(nint hdc, string text, int len, ref RECT r, uint format);
 
-    public const uint DT_CENTER = 0x1, DT_VCENTER = 0x4, DT_SINGLELINE = 0x20, DT_CALCRECT = 0x400,
+    public const uint DT_CENTER = 0x1, DT_VCENTER = 0x4, DT_WORDBREAK = 0x10, DT_SINGLELINE = 0x20, DT_CALCRECT = 0x400,
         DT_END_ELLIPSIS = 0x8000, DT_NOPREFIX = 0x800;
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetDpiForWindow(nint hwnd);
 

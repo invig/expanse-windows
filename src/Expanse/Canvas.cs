@@ -1237,6 +1237,7 @@ sealed class Canvas
         new(Elevation.IsElevated ? "Include Admin Windows" : "Include Admin Windows…", ToggleAdminWindows, Elevation.IsElevated, Enabled: !paused),
         new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
         new("Restore All Windows", RestoreAll, Enabled: !paused),
+        new("Welcome & Shortcuts…", ShowWelcome),
         null,
         new("Open at Login", () => LoginItem.Set(!LoginItem.IsOn), LoginItem.IsOn),
         new("Troubleshooting", null, Children: new Tray.Item?[]
@@ -1566,7 +1567,13 @@ sealed class Canvas
         // then would land in it, and WinUI apps show their key tips.
         if (IsForeground(hwnd, returned ? 25 : 5)) return $"direct (from {from})";
         var steps = $"direct refused (returned {returned}, from {from})";
-        TapAlt();
+        // A key no app acts on, first: an Alt tap lands in the window in front, and WinUI apps
+        // (Notepad, Settings) show their key tips for it.
+        TapKey(0xFF);
+        returned = SetForegroundWindow(hwnd);
+        if (IsForeground(hwnd)) return steps + ", ok after a null key";
+        steps += $", null key refused (returned {returned})";
+        TapKey(VK_MENU);
         returned = SetForegroundWindow(hwnd);
         if (IsForeground(hwnd)) return steps + ", ok after Alt tap";
         steps += $", Alt tap refused (returned {returned})";
@@ -1590,13 +1597,13 @@ sealed class Canvas
         return false;
     }
 
-    static void TapAlt()
+    static void TapKey(int vk)
     {
         var inputs = new INPUT[2];
         inputs[0].type = INPUT_KEYBOARD;
-        inputs[0].u.ki.wVk = VK_MENU;
+        inputs[0].u.ki.wVk = (ushort)vk;
         inputs[1].type = INPUT_KEYBOARD;
-        inputs[1].u.ki.wVk = VK_MENU;
+        inputs[1].u.ki.wVk = (ushort)vk;
         inputs[1].u.ki.dwFlags = KEYEVENTF_KEYUP;
         SendInput(2, inputs, Marshal.SizeOf<INPUT>());
     }
@@ -2045,6 +2052,7 @@ sealed class Canvas
                 if (HotCorner.Choices.Any(c => c.key == arg)) { settings.HotCorner = arg; settings.Save(); }
                 request.Reply($"hot corner {settings.HotCorner}");
                 break;
+            case "welcome": ShowWelcome(); request.Reply("shown"); break;
             case "names": // Show Window Names on or off
                 settings.ShowNames = arg == "on";
                 settings.Save();
@@ -2259,6 +2267,27 @@ sealed class Canvas
         }
         Log.Info($"restore all: {i} windows brought into view");
         ScheduleSave();
+    }
+
+    // MARK: Welcome
+
+    /// Shortcuts another app holds (Program fills this in), for Welcome & Shortcuts to mention.
+    public readonly List<string> ShortcutProblems = new();
+
+    /// Welcome & Shortcuts: an ordinary window, so zoomed out it waits until the canvas has gone,
+    /// or it would open underneath (as on the Mac).
+    public void ShowWelcome()
+    {
+        if (active && !gliding) Exit(null);
+        // In front: Windows lets a program take the foreground only now and then (see Focus).
+        if (Welcome.Show(settings.HotCorner, ShortcutProblems) is var w and not 0) Log.Info($"welcome: focus {Focus(w)}");
+        if (!settings.WelcomeShown) { settings.WelcomeShown = true; settings.Save(); }
+    }
+
+    /// First launch: Welcome & Shortcuts opens by itself.
+    public void WelcomeIfNew()
+    {
+        if (!settings.WelcomeShown) ShowWelcome();
     }
 
     // MARK: Troubleshooting

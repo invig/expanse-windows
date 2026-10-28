@@ -27,6 +27,9 @@ sealed class Settings
     /// Troubleshooting > Detailed Logging: the log is written to a file too (see Log).
     public bool DetailedLogging { get; set; }
 
+    /// Welcome & Shortcuts has been shown (it opens by itself on first launch only).
+    public bool WelcomeShown { get; set; }
+
     /// The note about admin windows staying put has been shown (once ever).
     public bool AdminNoteShown { get; set; }
 
