@@ -90,8 +90,8 @@ Not tested:
 | Trigger | Result |
 |---|---|
 | No input: a process started by Task Scheduler, or a fresh Expanse given a command over the pipe | Refused; works after a dummy Alt tap |
-| Hotkey (Ctrl+Alt+`) → the overlay | Direct, 6 of 6 |
-| Click on the overlay → the picked window | Direct, 6 of 7 |
+| Hotkey (Ctrl+Alt+`) → the overlay | Direct, 4 of 4 |
+| Click on the overlay → the picked window | Direct, 5 of 6 |
 | Pipe command after Expanse got the last input | Direct ("the process that received the last input" rule) |
 
 The one refused click came straight after an Alt-tap fallback. That Alt tap put the overlay into
