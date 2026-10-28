@@ -6,6 +6,10 @@
     <ApplicationIcon>Expanse.ico</ApplicationIcon>
     <Version>0.1.0</Version>
   </PropertyGroup>
+  <!-- scripts/release.sh builds with ExpanseRelease=true: a release, which updates itself. -->
+  <ItemGroup Condition="'$(ExpanseRelease)' == 'true'">
+    <AssemblyMetadata Include="ExpanseRelease" Value="true" />
+  </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Native\*.cs" Link="Native\%(Filename)%(Extension)" />
     <ProjectReference Include="..\Layout\Layout.csproj" />

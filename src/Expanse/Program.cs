@@ -25,7 +25,8 @@ if (!first)
     }
 }
 
-Log.Info($"Expanse starting (pid {Environment.ProcessId}, {(Elevation.IsElevated ? "as administrator" : "not as administrator")})");
+Log.Info($"Expanse {Updater.CurrentVersion} starting (pid {Environment.ProcessId}, {(Elevation.IsElevated ? "as administrator" : "not as administrator")})");
+Updater.CleanUp();
 // Include Admin Windows is on: run as administrator (Windows asks). Nothing's been touched yet,
 // so the new one simply starts; said no, this one carries on without admin windows.
 if (Settings.Load().RunAsAdmin && !Elevation.IsElevated)

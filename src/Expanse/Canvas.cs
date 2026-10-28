@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -20,6 +21,9 @@ sealed class Canvas
     readonly Wallpaper wallpaper = new();
     readonly Settings settings = Settings.Load();
     readonly Tray tray;
+    readonly Updater updater;
+    readonly ConcurrentQueue<Action> posted = new();
+    const uint WM_RUN = WM_APP + 6;
     readonly WinEvents events;
     readonly DesktopInput desktopInput;
     /// Bottom-most first: the last window is the frontmost, as in the Mac app.
@@ -133,6 +137,7 @@ sealed class Canvas
         overlay.Handler = Handle;
         Log.Info($"screen {monitor}, work area {work}, dpi {GetDpiForWindow(overlay.Hwnd)}");
         tray = new Tray(overlay.Hwnd);
+        updater = new Updater(Post) { OnReady = UpdateReady };
         events = new WinEvents(OnWindowEvent);
         desktopInput = new DesktopInput(overlay.Hwnd);
         lastFocusedWindow = GetForegroundWindow();
@@ -365,6 +370,7 @@ sealed class Canvas
     public void Start()
     {
         SetTimer(overlay.Hwnd, HotCornerTimer, 33, 0); // the hot corner's poll, 30 times a second
+        updater.Start(() => settings.CheckForUpdates);
         ReadScreen();
         saved = LayoutStore.Load();
         if (saved != null) LayoutStore.ToDpi(saved, dpi);
@@ -1310,8 +1316,8 @@ sealed class Canvas
         return items;
     }
 
-    IReadOnlyList<Tray.Item?> TrayMenu() => new Tray.Item?[]
-    {
+    IReadOnlyList<Tray.Item?> TrayMenu() =>
+    [
         new("Open Expanse\tCtrl+Alt+`", () => Toggle(), Enabled: !paused),
         new(paused ? "Resume Expanse" : "Pause Expanse", () => { if (paused) Resume(); else Pause(); }),
         null,
@@ -1331,16 +1337,19 @@ sealed class Canvas
         new("Restore All Windows", RestoreAll, Enabled: !paused),
         new("Welcome & Shortcuts…", ShowWelcome),
         null,
+        .. UpdateMenu(),
         new("Open at Login", () => LoginItem.Set(!LoginItem.IsOn), LoginItem.IsOn),
         new("Troubleshooting", null, Children: new Tray.Item?[]
         {
             new("Detailed Logging", ToggleDetailedLogging, settings.DetailedLogging),
             new("Copy Logs for a Bug Report", CopyLogs),
             new("Show Log File", ShowLogFile, Enabled: File.Exists(Log.FilePath)),
+            null,
+            new("Report an Issue on GitHub…", () => Updater.Open(BugReport.IssuesUrl)),
         }),
         null,
         new("Quit Expanse", Quit),
-    };
+    ];
 
     // MARK: Zoom out, dive in
 
@@ -1846,6 +1855,9 @@ sealed class Canvas
         if (msg == tray.TaskbarCreated) { tray.Add(); return 0; }
         switch (msg)
         {
+            case WM_RUN:
+                while (posted.TryDequeue(out var action)) action();
+                return 0;
             case WM_TIMER when wParam == SyncTimer:
                 KillTimer(overlay.Hwnd, SyncTimer);
                 if (!CompositorSettled) { SetTimer(overlay.Hwnd, SyncTimer, 250, 0); return 0; }
@@ -2207,6 +2219,17 @@ sealed class Canvas
         switch (verb)
         {
             case "state": request.Reply(State()); break;
+            case "update": // check now; `update install`: and install what's found (expanse://update?install=1)
+                updater.Check((outcome, text) =>
+                {
+                    request.Reply($"{outcome}: {text}");
+                    if (outcome == Updater.Outcome.Ready && arg == "install") InstallUpdate();
+                });
+                break;
+            case "update-source": // testing: ask somewhere else for the latest release (none: GitHub)
+                updater.Source = Uri.TryCreate(arg, UriKind.Absolute, out var source) ? source : null;
+                request.Reply(updater.Source?.ToString() ?? "GitHub");
+                break;
             case "windows": request.Reply(CanvasWindow.Describe()); break;
             case "centre": CentreCurrentWindow(); WhenIdle(request); break;
             case "restoreall": RestoreAll(); request.Reply("done"); break;
@@ -2377,6 +2400,9 @@ sealed class Canvas
             gliding,
             pictures = pictures.Name,
             picturesLost = pictures.Lost,
+            version = Updater.CurrentVersion,
+            release = Updater.IsRelease,
+            updateReady = updater.Ready?.release.Version,
             paused,
             guides = guides.Select(g => $"{g.From.X:0},{g.From.Y:0} -> {g.To.X:0},{g.To.Y:0}"),
             guidesOverPictures,
@@ -2516,6 +2542,79 @@ sealed class Canvas
         if (File.Exists(Log.FilePath))
             Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{Log.FilePath}\"") { UseShellExecute = false });
     }
+
+    // MARK: Updates
+
+    /// Runs `action` on the UI thread, from a background task.
+    void Post(Action action)
+    {
+        posted.Enqueue(action);
+        PostMessage(overlay.Hwnd, WM_RUN, 0, 0);
+    }
+
+    /// Install (once one's ready), Check for Updates, and on release builds, checking by itself.
+    IEnumerable<Tray.Item?> UpdateMenu()
+    {
+        if (updater.Ready is { } ready) yield return new($"Install Expanse {ready.release.Version}…", AskToInstall, Enabled: !active);
+        yield return new("Check for Updates…", CheckForUpdates);
+        if (Updater.IsRelease)
+            yield return new("Check for Updates Automatically", () => { settings.CheckForUpdates = !settings.CheckForUpdates; settings.Save(); }, settings.CheckForUpdates);
+    }
+
+    /// Found by itself: the tray icon says so, once per version; clicking the note opens the menu,
+    /// which has Install at the top of its last part.
+    void UpdateReady(Updater.Release release)
+    {
+        if (settings.UpdateNoted == release.Version) return;
+        settings.UpdateNoted = release.Version;
+        settings.Save();
+        tray.Notify($"Expanse {release.Version} is ready to install",
+            "Install it from the tray icon (click here). Expanse restarts, and your windows stay where they are.");
+    }
+
+    /// Check for Updates…: you asked, so you hear how it went.
+    void CheckForUpdates() => updater.Check((outcome, text) =>
+    {
+        switch (outcome)
+        {
+            case Updater.Outcome.DevelopmentBuild: Tell("Updates come with release builds", text); break;
+            case Updater.Outcome.Failed: Tell("Couldn't check for updates", text); break;
+            case Updater.Outcome.UpToDate: Tell("You're up to date", text); break;
+            case Updater.Outcome.Ready: AskToInstall(); break;
+        }
+    });
+
+    void AskToInstall()
+    {
+        if (updater.Ready is not { } ready) return;
+        if (Ask($"Expanse {ready.release.Version} is ready to install",
+                "Expanse restarts, and your windows stay where they are.\n\nInstall it now?")) InstallUpdate();
+    }
+
+    /// Swaps the new Expanse in and hands over to it: windows stay where they are, as when
+    /// switching to administrator.
+    void InstallUpdate()
+    {
+        if (active || updater.Ready is not { } ready) return;
+        if (updater.Install() is string why)
+        {
+            Tell($"Couldn't install Expanse {ready.release.Version}", $"{why}\n\nIts page on GitHub is open instead.");
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false }); }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException)
+        {
+            Log.Info($"couldn't start the new Expanse: {e.Message}");
+            Tell($"Expanse {ready.release.Version} is installed", "Start Expanse again to use it.");
+        }
+        HandOver();
+    }
+
+    static void Tell(string title, string text) =>
+        MessageBox(0, text, title, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+
+    static bool Ask(string title, string text) =>
+        MessageBox(0, text, title, MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST) == IDYES;
 
     // MARK: Admin windows
 

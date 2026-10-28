@@ -12,6 +12,7 @@
 #   scripts/vm.sh guest STEPS...   the Guest helper on the desktop: shot PATH | click X Y | key COMBO | wait MS
 #   scripts/vm.sh shot [FILE] [all] the VM's screen as a PNG (default out/shot.png); all: every display
 #   scripts/vm.sh run CMD          run CMD over SSH (cmd.exe)
+#   scripts/vm.sh fetch PATH FILE  copy PATH (under the repo in the VM) to FILE on the Mac
 #   scripts/vm.sh ps CMD           run a PowerShell command over SSH
 #   scripts/vm.sh snapshot NAME    save the VM's state; `restore NAME` goes back to it
 #
@@ -126,6 +127,7 @@ case ${1:-} in
     echo "$out"
     ;;
   run) shift; ssh_vm "$*" ;;
+  fetch) scp -O -q -i "$VM_KEY" -o BatchMode=yes "$VM_USER@$(vm_host):$REPO/${2:?path}" "${3:?file}" ;;
   ps) shift; ssh_vm "powershell -NoProfile -Command \"$*\"" ;;
   snapshot) "$UTMCTL" snapshot create "$VM_NAME" "${2:?name}" ;;
   restore) "$UTMCTL" snapshot restore "$VM_NAME" "${2:?name}" ;;

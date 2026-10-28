@@ -238,8 +238,8 @@ backend, with 10 windows, in the same session:
    - **Dialogs:** the Mac lowers the canvas under a dialog. On Windows a dialog is an ordinary
      window, not above the canvas, so it's the other way round: the asking dialog is made
      always-on-top for the while (and brought onto the screen if its window put it off it).
-   - **Not done, needs Matthew:** update checks (there's no release channel or repo for the
-     Windows build yet) and Report an Issue (no repo to point at).
+   - **Update checks and Report an Issue** (29 Oct), once the repo existed
+     (github.com/invig/expanse-windows): see item 9.
    - **The Spaces panel is the Desktops panel**, for Windows' virtual desktops: the list, names
      and current one read from Explorer's registry key (polled twice a second while zoomed out),
      switching by pressing Win+Ctrl+arrows once per desktop (there's no public API). The canvas
@@ -264,3 +264,18 @@ backend, with 10 windows, in the same session:
    are minimised by Windows (its "Minimize windows when a monitor is disconnected" setting) and
    come back to their spots. One wrinkle: the Settings window maximised itself during the change
    and the fit moved one parked window 32 px to make room, which stayed after the round trip.
+9. **Updates and releases** (29 Oct), a port of the Mac's Updater: once a day (and a minute after
+   launch) Expanse asks GitHub for the repo's latest release, downloads
+   `Expanse-<version>-windows-<arm64|x64>.zip` for its own processor, and checks it: the SHA-256
+   GitHub lists for the asset, the version in the exe, and when the running copy is code-signed,
+   the same publisher (WinVerifyTrust plus the signer's certificate). Install renames the running
+   Expanse.exe (Windows allows that, not overwriting it), moves the new one in, starts it, and hands
+   over as Include Admin Windows does, so nothing moves; the new copy deletes the old file. Release
+   builds only (`ExpanseRelease` set by `scripts/release.sh`, which publishes single-file,
+   self-contained, compressed builds: about 45 MB, 39 MB zipped). Tested in the VM with release
+   builds 0.1.0 and 0.1.1 and a stand-in for GitHub on the Mac (`ctl update-source URL`): a wrong
+   SHA-256 is refused; the right one installs, restarts as 0.1.1 in about 3 s, every window where
+   it was. Against the real repo it says there's no release yet (GitHub answers 404 while the repo
+   is private or has none). Not tested: the x64 build on an x64 PC, the tray's Check for Updates
+   dialogs (the same code as `ctl update`), and installing from a folder you can't write to (it
+   opens the release page instead).

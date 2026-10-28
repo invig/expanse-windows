@@ -307,6 +307,10 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool TranslateMessage(ref MSG msg);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint DispatchMessage(ref MSG msg);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool PostMessage(nint hwnd, uint msg, nint wParam, nint lParam);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int MessageBox(nint owner, string text, string caption, uint type);
+    public const uint MB_OK = 0, MB_YESNO = 4, MB_ICONINFORMATION = 0x40, MB_ICONWARNING = 0x30,
+        MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000;
+    public const int IDYES = 6;
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SendMessage(nint hwnd, uint msg, nint wParam, nint lParam);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool PostThreadMessage(uint thread, uint msg, nint wParam, nint lParam);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern void PostQuitMessage(int code);

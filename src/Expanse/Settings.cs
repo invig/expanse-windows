@@ -33,6 +33,12 @@ sealed class Settings
     /// The note about admin windows staying put has been shown (once ever).
     public bool AdminNoteShown { get; set; }
 
+    /// Check for Updates Automatically (release builds): once a day, as on the Mac.
+    public bool CheckForUpdates { get; set; } = true;
+
+    /// The update the tray icon last said was ready (said once per version).
+    public string? UpdateNoted { get; set; }
+
     static string File => Path.Combine(Log.Folder, "settings.json");
 
     public static Settings Load()

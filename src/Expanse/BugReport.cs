@@ -7,10 +7,13 @@ using static Expanse.Native.User32;
 namespace Expanse;
 
 /// Tray menu > Troubleshooting > Copy Logs for a Bug Report: what's needed to look into a problem,
-/// on the clipboard, ready to paste into an issue. This PC and Expanse's settings, then the log:
+/// on the clipboard, ready to paste into a GitHub issue. This PC and Expanse's settings, then the log:
 /// the Detailed Logging file, or without it, this run's lines (kept in memory). As on the Mac.
 static class BugReport
 {
+    /// Troubleshooting > Report an Issue on GitHub…
+    public static readonly Uri IssuesUrl = new($"https://github.com/{Updater.Repo}/issues/new");
+
     /// GitHub takes 65,536 characters in an issue; this leaves room for the summary and your words.
     const int MaxLogCharacters = 45_000;
 
@@ -47,7 +50,7 @@ static class BugReport
         var displays = Monitors().Select(m => $"{m.monitor.Width}x{m.monitor.Height}{(m.primary ? " (main)" : "")}");
         var lines = new[]
         {
-            $"Expanse {version}, {(Elevation.IsElevated ? "running as administrator" : "running as you")}",
+            $"Expanse {version} ({(Updater.IsRelease ? "release" : "development")} build), {(Elevation.IsElevated ? "running as administrator" : "running as you")}",
             $"Windows: {windows}",
             $"Displays: {string.Join("; ", displays)}, main scaling {PrimaryDpi() * 100 / 96}%",
         }.Concat(settings);

@@ -6,8 +6,8 @@ one to glide straight to it.
 
 <p align="center"><img src="docs/images/milestone-zoomed-out.jpg" alt="Zoomed out: every window live on the canvas" width="720"></p>
 
-It does what the Mac app does, bar update checks (see [docs/spikes.md](docs/spikes.md) for what's
-left and why):
+It does what the Mac app does (see [docs/spikes.md](docs/spikes.md) for how each part was
+built and tested):
 
 - **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
   layout), by resting the pointer in any corner of the screen (the **Hot Corner**, tray menu:
@@ -61,8 +61,8 @@ left and why):
   the menu, as on the Mac: Open, Pause/Resume, Centre Current Window, Auto-Centre, Desktop Picture
   Background, Show Window Names, Hot Corner, Tidy Up, Restore Layout, Restore All Windows (the last
   resort: every window off the screen stacked into view), Include Admin Windows, Welcome &
-  Shortcuts, Open at Login, Troubleshooting (Detailed Logging, Copy Logs for a Bug Report, Show Log
-  File), Quit. Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep
+  Shortcuts, Check for Updates, Open at Login, Troubleshooting (Detailed Logging, Copy Logs for a
+  Bug Report, Show Log File, Report an Issue on GitHub), Quit. Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep
   it in view.
 - **Welcome & Shortcuts** opens on first launch: the shortcuts, where the hot corner is, and any
   shortcut another app holds.
@@ -124,6 +124,23 @@ left and why):
 C# / .NET 10, built for ARM64 for now (the dev VM). Live pictures are DWM's shared thumbnail
 visuals, with plain DWM thumbnails as the fallback. See [docs/spikes.md](docs/spikes.md) for why,
 and for what's next.
+
+## Install
+
+Download the zip for your PC from [Releases](https://github.com/invig/expanse-windows/releases/latest):
+**x64** for most PCs, **arm64** for Windows on Arm. Unzip it into a folder of your own (in your user
+folder, not Program Files, so Expanse can update itself) and run **Expanse.exe**. It's one file,
+with nothing else to install, and runs on Windows 11. **Open at Login** on the tray menu starts it
+with Windows.
+
+Expanse isn't code-signed yet, so the first time, Windows may say "Windows protected your PC":
+choose **More info**, then **Run anyway**.
+
+**Updates** come from this repo's releases, as on the Mac: once a day Expanse asks GitHub for the
+latest, downloads it, checks it (the SHA-256 GitHub lists, the version; once Expanse is signed, the
+same publisher's signature), and the tray icon says it's ready. Install restarts Expanse with your
+windows where they are. **Check for Updates…** on the tray menu checks now; `expanse://update`
+does too (`?install=1` installs what it finds).
 
 ## How it works
 
@@ -190,6 +207,8 @@ scripts/vm.sh guest scale 125      # the main display's scaling (`scale 150 2`: 
 scripts/vm.sh shot out/both.png all          # every display, not just the main one
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 scripts/vm.sh test          # the layout maths' tests
+DRY_RUN=1 scripts/release.sh   # release builds (arm64, x64) zipped in artifacts/release
+scripts/release.sh          # the same, published as a GitHub release (bump <Version> first)
 ```
 
 **The layout maths is a line-for-line port of the Mac app's** (nearest window, derive, separate,

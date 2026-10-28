@@ -53,6 +53,7 @@ static class Links
             "layout" when q["snapshot"] is string s => $"restore {s}",
             "zoom" when q["scale"] is string s => $"zoom {s}",
             "pan" => $"pan {q["dx"] ?? "0"} {q["dy"] ?? "0"}",
+            "update" => q["install"] == "1" ? "update install" : "update",
             _ => null,
         };
     }
