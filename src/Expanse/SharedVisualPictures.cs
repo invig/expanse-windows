@@ -38,7 +38,9 @@ sealed class SharedVisualPictures : IPictures
     readonly ID3D11Device d3d;
     readonly IDCompositionDesktopDevice device;
     readonly IDCompositionTarget target;
-    readonly IDCompositionVisual2 root, canvas;
+    readonly IDCompositionVisual2 root, canvas, guides;
+    readonly IDCompositionSurface pink;
+    readonly List<IDCompositionVisual2> guideLines = new();
     readonly Dictionary<nint, Picture> pictures = new();
     readonly bool failForTesting;
     (double x, double y, double s)? lastCamera;
@@ -64,8 +66,27 @@ sealed class SharedVisualPictures : IPictures
         device.CreateVisual(out canvas);
         canvas.SetBitmapInterpolationMode(BitmapInterpolationMode.Linear);
         root.AddVisual(canvas, false, null);
+        // Snapping guides: lines over the pictures, each a 1x1 pink surface stretched by its
+        // transform.
+        device.CreateVisual(out guides);
+        root.AddVisual(guides, false, null);
+        pink = SolidSurface(1.0f, 0.22f, 0.37f);
         device.Commit();
         Log.Info($"pictures: shared visuals (D3D11 {driver})");
+    }
+
+    IDCompositionSurface SolidSurface(float r, float g, float b)
+    {
+        var created = device.CreateSurface(1, 1, Format.B8G8R8A8_UNorm, AlphaMode.Premultiplied, out var surface);
+        if (created.Failure) Log.Info($"pictures: CreateSurface failed {created}");
+        using (var tex = surface.BeginDraw<ID3D11Texture2D>(null, out Vortice.Mathematics.Int2 offset))
+        using (var rtv = d3d.CreateRenderTargetView(tex, null))
+        using (var context = d3d.ImmediateContext)
+        using (var context1 = context.QueryInterface<ID3D11DeviceContext1>())
+            context1.ClearView(rtv, new Vortice.Mathematics.Color4(r, g, b, 1f),
+                new[] { new Vortice.RawRect(offset.X, offset.Y, offset.X + 1, offset.Y + 1) });
+        surface.EndDraw();
+        return surface;
     }
 
     static ID3D11Device CreateD3D(out string driver)
@@ -95,6 +116,7 @@ sealed class SharedVisualPictures : IPictures
 
     public bool Add(CanvasWindow w)
     {
+        if (pictures.ContainsKey(w.Hwnd)) return true;
         var props = new DWM_THUMBNAIL_PROPERTIES
         {
             dwFlags = Dwm.DWM_TNP_RECTDESTINATION | Dwm.DWM_TNP_RECTSOURCE | Dwm.DWM_TNP_VISIBLE |
@@ -158,11 +180,53 @@ sealed class SharedVisualPictures : IPictures
         lastCamera = key;
     }
 
+    public void Moved(CanvasWindow w, Camera camera, RectD view)
+    {
+        if (!pictures.TryGetValue(w.Hwnd, out var p)) return;
+        p.Visual.SetOffsetX((float)w.Frame.X);
+        p.Visual.SetOffsetY((float)w.Frame.Y);
+        device.Commit();
+    }
+
+    public bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness)
+    {
+        while (guideLines.Count < lines.Count)
+        {
+            device.CreateVisual(out var v);
+            v.SetContent(pink);
+            v.SetBorderMode(BorderMode.Hard); // soft edges fade a stretched 1 px bitmap to nothing
+            guideLines.Add(v);
+        }
+        guides.RemoveAllVisuals();
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var (a, b) = lines[i];
+            float t = (float)thickness;
+            // Vertical or horizontal: a thin rect along it, centred on the line.
+            float x = (float)Math.Min(a.X, b.X), y = (float)Math.Min(a.Y, b.Y);
+            float w = (float)Math.Abs(b.X - a.X), h = (float)Math.Abs(b.Y - a.Y);
+            if (w < h) { x -= t / 2; w = t; } else { y -= t / 2; h = t; }
+            var results = new[]
+            {
+                guideLines[i].SetContent(pink), guideLines[i].SetTransform(new Matrix3x2(w, 0, 0, h, x, y)),
+                guides.AddVisual(guideLines[i], false, null),
+            };
+            if (results.Any(r => r.Failure)) Log.Info($"pictures: guide {i}: {string.Join(", ", results)}");
+        }
+        var commit = device.Commit();
+        if (commit.Failure) Log.Info($"pictures: commit failed {commit}");
+        return true;
+    }
+
     public void Flush() => device.WaitForCommitCompletion();
 
     public void Dispose()
     {
         Detach();
+        guides.RemoveAllVisuals();
+        foreach (var v in guideLines) v.Dispose();
+        guides.Dispose();
+        pink.Dispose();
         canvas.Dispose();
         root.Dispose();
         target.Dispose();

@@ -263,6 +263,10 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetSystemMetrics(int index);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetProcessDpiAwarenessContext(nint ctx);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetCursorPos(out POINT p);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetCapture(nint hwnd);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool ReleaseCapture();
+    public const uint WM_CAPTURECHANGED = 0x0215;
+    public const int MK_CONTROL = 0x8, VK_T = 0x54;
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetCursorPos(int x, int y);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint LoadCursor(nint instance, nint name);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetCursor(nint cursor);

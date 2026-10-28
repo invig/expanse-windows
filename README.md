@@ -16,6 +16,16 @@ Early days. What works so far:
   glide to it and focus it (Ctrl+arrows is word-jump in every app and Win+arrows is Snap, so
   Ctrl+Alt). Zoomed out, the arrows alone move the highlight and the view follows; <kbd>Return</kbd>
   dives into it.
+- **Drag a window's picture while zoomed out** to move it on the canvas. It snaps to other windows'
+  edges and centres, the standard 20 px gap, a whole row or column, and the middle of the screen,
+  with pink guides. Hold <kbd>Ctrl</kbd> to move it freely (⌘ on the Mac). The real window follows
+  when you go back to 100%.
+- **Tidy Up** (<kbd>T</kbd> zoomed out, or the tray menu) tidies each group of windows where it is:
+  overlaps pushed apart, edges that nearly line up lined up, gaps closed to 20 px. Everything glides
+  to its new spot.
+- **New windows open in free space** next to the window you were in (right, below, left, then above),
+  as on the Mac; the view glides there if that's off screen. A window coming back from being
+  minimised goes back to its own spot.
 - <kbd>Esc</kbd> or the hotkey again goes back to where you were; the mouse wheel zooms around the
   pointer.
 - **Windows are tracked live.** New windows join the canvas where they open, closed ones leave it,

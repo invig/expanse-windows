@@ -36,6 +36,24 @@ sealed class Canvas
     (nint hwnd, long at) lastOwnFocus;
     CanvasWindow? hovered;
     CanvasWindow? glideTarget; // where the glide or dive in flight is heading
+    Drag? drag;                // a picture being dragged while zoomed out
+    List<Layout.GuideLine> guides = new(); // snapping guides, canvas space
+    bool guidesOverPictures;   // drawn by the pictures (shared visuals), not under them
+    bool pendingTidy;          // Tidy Up from 100%: once zoomed out
+    bool initialSyncDone;
+    /// Windows that became visible since the last sync (EVENT_OBJECT_SHOW): the new ones among
+    /// them are placed in free space.
+    readonly HashSet<nint> shownRecently = new();
+    /// Spots of windows minimised, hidden or cloaked: they come back to them.
+    readonly Dictionary<nint, RectD> departed = new();
+
+    sealed class Drag(CanvasWindow window, Vec startPoint)
+    {
+        public readonly CanvasWindow Window = window;
+        public readonly RectD StartFrame = window.Frame;
+        public readonly Vec StartPoint = startPoint;
+        public bool Moved;
+    }
     nint previousForeground;
     Animation? animation;
     Bench? bench;
@@ -50,6 +68,8 @@ sealed class Canvas
         public int Frames;
         public long FirstFrame, LastFrame;
         public double MaxGap, LayoutTotal;
+        /// Windows moving on the canvas at the same time (Tidy Up).
+        public List<(CanvasWindow w, RectD from, RectD to)>? Moves;
     }
 
     public Canvas(Overlay overlay, string pictureKind)
@@ -110,10 +130,49 @@ sealed class Canvas
             next.Add(w);
         }
         var removed = windows.Except(next).ToList();
-        foreach (var gone in removed) Log.Info($"window {gone} gone");
+        foreach (var gone in removed)
+        {
+            // Still there, just minimised, hidden or cloaked: it'll come back to its spot.
+            if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone.Frame;
+            Log.Info($"window {gone} {(IsWindow(gone.Hwnd) ? "left the canvas for now" : "gone")}");
+        }
+        foreach (var h in departed.Keys.Where(h => !IsWindow(h)).ToList()) departed.Remove(h);
         windows.Clear();
         windows.AddRange(next);
         return (added, removed);
+    }
+
+    /// The first sync: windows already open stay where they are.
+    public void Start()
+    {
+        Sync();
+        initialSyncDone = true;
+    }
+
+    /// A window that wasn't on the canvas appeared. Back from minimise (or hidden, or another
+    /// virtual desktop): to its old spot. New (just shown): into free space beside the window
+    /// you were in (Layout.FreeSpot), and the view glides there if that's off screen, as on
+    /// the Mac.
+    void Arrive(CanvasWindow w)
+    {
+        if (departed.Remove(w.Hwnd, out var spot))
+        {
+            w.Frame = spot with { W = w.Frame.W, H = w.Frame.H };
+            Log.Info($"{w} back at its spot {w.Frame}");
+            if (!active) Place(w);
+            return;
+        }
+        if (!initialSyncDone || !shownRecently.Contains(w.Hwnd)) return;
+        var anchor = windows.FirstOrDefault(x => x.Hwnd == lastFocusedWindow && x != w);
+        var visible = camera.ToCanvas(new RectD(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height));
+        var others = windows.Where(x => x != w).Select(x => x.Frame).ToList();
+        var target = anchor?.Frame.Center ?? camera.Center(ViewSize);
+        if (Layout.FreeSpot(w.Frame.Size, anchor?.Frame, others, target, visible, onScreenOnly: !settings.AutoCentre) is not Vec o) return;
+        w.Frame = w.Frame with { X = o.X, Y = o.Y };
+        Log.Info($"placed new window {w} at {o.X:0},{o.Y:0}{(anchor != null ? $" beside {anchor}" : "")}");
+        if (active) return; // its picture goes there; the window follows at the hand-back
+        if (visible.Contains(w.Frame)) Place(w);
+        else Glide(w, sync: false); // a sync now would read it back from where the app opened it
     }
 
     /// Canvas = screen - monitor origin + the 100% camera's origin. Zoomed out, the real windows
@@ -181,7 +240,9 @@ sealed class Canvas
             case EVENT_OBJECT_SHOW:
             case EVENT_OBJECT_UNCLOAKED:
             case EVENT_SYSTEM_MINIMIZEEND:
-                if (GetAncestor(hwnd, GA_ROOT) == hwnd) ScheduleSync();
+                if (GetAncestor(hwnd, GA_ROOT) != hwnd) break;
+                if (ev == EVENT_OBJECT_SHOW) shownRecently.Add(hwnd);
+                ScheduleSync();
                 break;
             case EVENT_OBJECT_HIDE:
             case EVENT_OBJECT_DESTROY:
@@ -199,8 +260,12 @@ sealed class Canvas
     {
         if (paused) return;
         if (gliding) { pendingSync = true; return; }
+        bool wasActive = active;
         var (added, removed) = Sync();
-        if (!active || (added.Count == 0 && removed.Count == 0)) return;
+        foreach (var w in added) Arrive(w);
+        shownRecently.Clear();
+        // An arrival may have started a glide, whose pictures are already up.
+        if (!wasActive || gliding || (added.Count == 0 && removed.Count == 0)) return;
         foreach (var w in removed)
         {
             pictures.Remove(w);
@@ -286,6 +351,70 @@ sealed class Canvas
     CanvasWindow? Nearest(Direction direction, RectD from) =>
         Layout.Nearest(direction, from, windows.Select(w => w.Frame).ToList()) is int i ? windows[i] : null;
 
+    // MARK: Tidy Up
+
+    /// T, or the tray menu: each group of windows tidied where it is (Layout.TidyUp: overlaps
+    /// pushed apart, edges that nearly line up lined up, gaps closed to the standard 20), shown
+    /// zoomed out with every window gliding to its new spot. The real windows follow at the
+    /// hand-back. (The Mac also caps window sizes at the screen here; not yet.)
+    public void Tidy()
+    {
+        if (paused || gliding || windows.Count == 0) return;
+        if (!active) { pendingTidy = true; Enter(zoomOut: true); return; }
+        if (animation != null || drag != null) return;
+        var start = windows.Select(w => w.Frame).ToArray();
+        var frames = start.ToArray();
+        Layout.TidyUp(frames);
+        for (int i = 0; i < frames.Length; i++)
+            frames[i] = frames[i] with { X = Layout.Round(frames[i].X), Y = Layout.Round(frames[i].Y) };
+        var moves = windows.Select((w, i) => (w, start[i], frames[i])).Where(m => m.Item2 != m.Item3).ToList();
+        Log.Info($"tidy: {moves.Count} of {windows.Count} windows move");
+        for (int i = 0; i < frames.Length; i++) windows[i].Frame = frames[i];
+        var target = FitCamera(1);
+        for (int i = 0; i < frames.Length; i++) windows[i].Frame = start[i];
+        Animate(target, 0.3, null, moves);
+    }
+
+    // MARK: Dragging
+
+    /// A picture dragged zoomed out moves its window's spot, snapping to the other windows'
+    /// edges, centres and the standard gap (Layout.Snap) unless Ctrl is held (⌘ on the Mac).
+    /// A press that doesn't move 3 px is a click: dive into the window.
+    void DragTo(Vec p, bool snap)
+    {
+        var d = drag!;
+        if (!d.Moved && p.DistanceTo(d.StartPoint) < 3) return;
+        d.Moved = true;
+        var proposed = d.StartFrame.Offset(new Vec((p.X - d.StartPoint.X) / camera.Scale, (p.Y - d.StartPoint.Y) / camera.Scale));
+        var (frame, lines) = snap
+            ? Layout.Snap(proposed, windows.Where(w => w != d.Window).Select(w => w.Frame).ToList(), camera.Scale, camera.Center(ViewSize))
+            : (proposed, new List<Layout.GuideLine>());
+        d.Window.Frame = frame;
+        pictures.Moved(d.Window, camera, View);
+        ShowGuides(lines);
+        hovered = d.Window;
+        overlay.Invalidate();
+    }
+
+    void EndDrag(bool click)
+    {
+        if (drag is not Drag d) return;
+        drag = null;
+        ReleaseCapture();
+        ShowGuides(new());
+        if (d.Moved) Log.Info($"dragged {d.Window} to {d.Window.Frame}");
+        else if (click) { Log.Info($"click on {d.Window}"); Exit(d.Window); }
+        overlay.Invalidate();
+    }
+
+    void ShowGuides(List<Layout.GuideLine> lines)
+    {
+        guides = lines;
+        // The Mac's 1 pt guides are 2 px on a Retina screen.
+        double thickness = Math.Max(2, Math.Round(2 * GetDpiForWindow(overlay.Hwnd) / 96.0));
+        guidesOverPictures = pictures.SetGuides(lines.Select(l => (camera.ToView(l.From), camera.ToView(l.To))).ToList(), thickness);
+    }
+
     // MARK: Pause, tray menu
 
     /// Puts every window back where it was before Expanse moved it and stops following them.
@@ -317,6 +446,7 @@ sealed class Canvas
         null,
         new("Auto-Centre Focused Window", () => { settings.AutoCentre = !settings.AutoCentre; settings.Save(); }, settings.AutoCentre),
         new("Desktop Picture Background", () => { settings.Wallpaper = !settings.Wallpaper; settings.Save(); }, settings.Wallpaper),
+        new("Tidy Up Windows", Tidy, Enabled: !paused),
         null,
         new("Quit Expanse", Quit),
     };
@@ -331,7 +461,7 @@ sealed class Canvas
 
     /// Raises the overlay with every picture exactly over its real window, then (zoomOut)
     /// animates out to every window.
-    public void Enter(bool zoomOut)
+    public void Enter(bool zoomOut, bool sync = true)
     {
         if (active)
         {
@@ -339,7 +469,7 @@ sealed class Canvas
             return;
         }
         (monitor, work) = PrimaryMonitor();
-        Sync();
+        if (sync) Sync();
         previousForeground = GetForegroundWindow();
         active = true;
         gliding = !zoomOut;
@@ -366,6 +496,7 @@ sealed class Canvas
             {
                 GetCursorPos(out var p);
                 hovered = WindowAt(new Vec(p.X - monitor.Left, p.Y - monitor.Top));
+                if (pendingTidy) { pendingTidy = false; Tidy(); }
             });
         }
     }
@@ -415,11 +546,11 @@ sealed class Canvas
 
     /// From 100%: the overlay rises at scale 1 (pictures over the real windows), the camera
     /// glides to `w`, then everything is handed back as after a dive.
-    public void Glide(CanvasWindow w)
+    public void Glide(CanvasWindow w, bool sync = true)
     {
         if (gliding) return;
         if (active) { Exit(w); return; }
-        Enter(zoomOut: false);
+        Enter(zoomOut: false, sync);
         Exit(w, 0.3);
     }
 
@@ -454,25 +585,30 @@ sealed class Canvas
     /// Windows can sit fully off-screen; the window manager's limit is about ±32k.
     int Commit()
     {
-        int moved = 0;
-        bool newOriginals = false;
-        foreach (var w in windows)
-        {
-            var v = camera.ToView(w.Frame);
-            int x = (int)Math.Round(v.X) + monitor.Left - w.Insets.Left;
-            int y = (int)Math.Round(v.Y) + monitor.Top - w.Insets.Top;
-            x = Math.Clamp(x, -30000, 30000);
-            y = Math.Clamp(y, -30000, 30000);
-            w.Placed = new POINT(x + w.Insets.Left, y + w.Insets.Top);
-            GetWindowRect(w.Hwnd, out var current);
-            if (current.Left == x && current.Top == y) continue;
-            if (w.Original == null) { w.Original = current; newOriginals = true; }
-            SetWindowPos(w.Hwnd, 0, x, y, 0, 0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
-            moved++;
-        }
-        if (newOriginals) Originals.Save(windows);
+        int moved = windows.Count(w => Place(w, saveOriginals: false));
+        Originals.Save(windows);
         return moved;
+    }
+
+    /// Moves one window to its camera spot. True if it had to move.
+    bool Place(CanvasWindow w, bool saveOriginals = true)
+    {
+        var v = camera.ToView(w.Frame);
+        int x = (int)Math.Round(v.X) + monitor.Left - w.Insets.Left;
+        int y = (int)Math.Round(v.Y) + monitor.Top - w.Insets.Top;
+        x = Math.Clamp(x, -30000, 30000);
+        y = Math.Clamp(y, -30000, 30000);
+        w.Placed = new POINT(x + w.Insets.Left, y + w.Insets.Top);
+        GetWindowRect(w.Hwnd, out var current);
+        if (current.Left == x && current.Top == y) return false;
+        if (w.Original == null)
+        {
+            w.Original = current;
+            if (saveOriginals) Originals.Save(windows);
+        }
+        SetWindowPos(w.Hwnd, 0, x, y, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        return true;
     }
 
     /// Up to ~10 frames for the windows that will be in view to reach their spots, so the
@@ -564,11 +700,11 @@ sealed class Canvas
 
     // MARK: Animation
 
-    void Animate(Camera to, double duration, Action? completion = null)
+    void Animate(Camera to, double duration, Action? completion = null, List<(CanvasWindow, RectD, RectD)>? moves = null)
     {
         animation = new Animation
         {
-            From = camera, To = to, Start = Stopwatch.GetTimestamp(), Duration = duration, Completion = completion,
+            From = camera, To = to, Start = Stopwatch.GetTimestamp(), Duration = duration, Completion = completion, Moves = moves,
         };
         overlay.Repaint(); // labels and the hover ring off while moving
     }
@@ -595,6 +731,12 @@ sealed class Canvas
         var c1 = a.To.Center(ViewSize);
         camera = t >= 1 ? a.To : Camera.Centered(new Vec(Lerp(c0.X, c1.X, e), Lerp(c0.Y, c1.Y, e)), s, ViewSize);
         long l0 = Stopwatch.GetTimestamp();
+        if (a.Moves != null)
+            foreach (var (w, from, to) in a.Moves)
+            {
+                w.Frame = t >= 1 ? to : new RectD(Lerp(from.X, to.X, e), Lerp(from.Y, to.Y, e), to.W, to.H);
+                pictures.Moved(w, camera, View);
+            }
         pictures.Layout(windows, camera, View);
         double layout = Ms(l0);
         a.LayoutTotal += layout;
@@ -652,18 +794,29 @@ sealed class Canvas
                 }
                 return 0;
             case WM_MOUSEMOVE:
-                Hover(new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)));
+            {
+                var p = new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF));
+                if (drag != null) DragTo(p, snap: ((int)wParam & MK_CONTROL) == 0);
+                else Hover(p);
                 return 0;
+            }
             case WM_LBUTTONDOWN:
             {
                 var p = new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF));
-                if (active && !gliding && WindowAt(p) is CanvasWindow w)
+                if (active && !gliding && animation == null && WindowAt(p) is CanvasWindow w)
                 {
-                    Log.Info($"click on {w}");
-                    Exit(w);
+                    BringToFront(w);
+                    drag = new Drag(w, p);
+                    SetCapture(overlay.Hwnd);
                 }
                 return 0;
             }
+            case WM_LBUTTONUP:
+                EndDrag(click: true);
+                return 0;
+            case WM_CAPTURECHANGED:
+                EndDrag(click: false);
+                return 0;
             case WM_MOUSEWHEEL:
             {
                 if (!active || gliding) return 0;
@@ -681,6 +834,7 @@ sealed class Canvas
                 {
                     case VK_ESCAPE: Exit(null); break;
                     case VK_RETURN when windows.Count > 0: Exit(hovered ?? windows[^1]); break;
+                    case VK_T: Tidy(); break;
                     case VK_LEFT: Navigate(Direction.Left); break;
                     case VK_RIGHT: Navigate(Direction.Right); break;
                     case VK_UP: Navigate(Direction.Up); break;
@@ -761,6 +915,21 @@ sealed class Canvas
             Gdi32.SelectObject(hdc, Gdi32.GetStockObject(Gdi32.NULL_PEN));
             Gdi32.DeleteObject(pen);
         }
+        if (!guidesOverPictures && guides.Count > 0)
+        {
+            // DWM thumbnails draw over us: guides go underneath, visible between the pictures.
+            nint pink = Gdi32.CreateSolidBrush(Gdi32.RGB(255, 56, 94));
+            int t = Math.Max(1, (int)k);
+            foreach (var g in guides)
+            {
+                Vec a = camera.ToView(g.From), b = camera.ToView(g.To);
+                var line = a.X == b.X
+                    ? new RECT((int)a.X - t / 2, (int)Math.Min(a.Y, b.Y), (int)a.X - t / 2 + t, (int)Math.Max(a.Y, b.Y))
+                    : new RECT((int)Math.Min(a.X, b.X), (int)a.Y - t / 2, (int)Math.Max(a.X, b.X), (int)a.Y - t / 2 + t);
+                FillRect(hdc, ref line, pink);
+            }
+            Gdi32.DeleteObject(pink);
+        }
         Gdi32.SelectObject(hdc, oldBrush);
         Gdi32.SelectObject(hdc, oldPen);
         Gdi32.SelectObject(hdc, oldFont);
@@ -810,6 +979,16 @@ sealed class Canvas
                 break;
             case "bench": StartBench(request, double.TryParse(arg, out double secs) ? secs : 5); break;
             case "hop" when Enum.TryParse<Direction>(arg, ignoreCase: true, out var d): Navigate(d); WhenIdle(request); break;
+            case "tidy": Tidy(); WhenIdle(request); break;
+            case "minimize" or "unminimize":
+            {
+                // A window off the canvas for now (minimised) is found among the departed.
+                nint h = Find(arg)?.Hwnd ?? departed.Keys.FirstOrDefault(d => Title(d).Contains(arg, StringComparison.OrdinalIgnoreCase));
+                if (h == 0) { request.Reply($"no window matches \"{arg}\""); break; }
+                ShowWindow(h, verb == "minimize" ? SW_MINIMIZE : SW_RESTORE);
+                request.Reply($"{verb}d {Title(h)}");
+                break;
+            }
             case "pause": Pause(); request.Reply(State()); break;
             case "resume": Resume(); request.Reply(State()); break;
             case "autocentre":
@@ -822,7 +1001,7 @@ sealed class Canvas
                 Quit();
                 break;
             default:
-                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, hop left|right|up|down, pause, resume, autocentre on|off, bench [SECONDS], quit");
+                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, hop left|right|up|down, tidy, minimize|unminimize <same>, pause, resume, autocentre on|off, bench [SECONDS], quit");
                 break;
         }
     }
@@ -850,6 +1029,8 @@ sealed class Canvas
             gliding,
             pictures = pictures.Name,
             paused,
+            guides = guides.Select(g => $"{g.From.X:0},{g.From.Y:0} -> {g.To.X:0},{g.To.Y:0}"),
+            guidesOverPictures,
             settings = new { settings.AutoCentre, settings.Wallpaper },
             animating = animation != null,
             camera = new { x = camera.Origin.X, y = camera.Origin.Y, scale = camera.Scale },

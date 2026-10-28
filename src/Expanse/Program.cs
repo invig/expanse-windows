@@ -42,7 +42,7 @@ foreach (var (id, key, name) in new[] { (Canvas.HotkeyLeft, VK_LEFT, "Left"), (C
         Log.Info($"couldn't register Ctrl+Alt+{name}: something else has it");
 
 new CommandServer(overlay.Hwnd).Start();
-canvas.Sync();
+canvas.Start();
 
 // The message loop. While the camera animates it runs a frame at a time: handle whatever
 // input is waiting, move the pictures, then wait for DWM to compose (DwmFlush).

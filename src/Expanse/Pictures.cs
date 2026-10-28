@@ -27,6 +27,13 @@ interface IPictures : IDisposable
     /// Positions every picture for `camera` (view = the overlay's client area).
     void Layout(IReadOnlyList<CanvasWindow> windows, Camera camera, RectD view);
 
+    /// `w`'s canvas frame changed (dragged, tidied): its picture follows.
+    void Moved(CanvasWindow w, Camera camera, RectD view);
+
+    /// Snapping guides, in view coordinates, over the pictures. False if this kind can't draw
+    /// over its pictures (the caller draws them underneath instead).
+    bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness);
+
     /// Waits until the last layout is on screen: before the overlay is shown, so it never
     /// appears without its pictures.
     void Flush();
@@ -73,6 +80,7 @@ sealed class ThumbnailPictures(nint dest) : IPictures
 
     public bool Add(CanvasWindow w)
     {
+        if (pictures.ContainsKey(w.Hwnd)) return true;
         int hr = Dwm.DwmRegisterThumbnail(dest, w.Hwnd, out nint thumb);
         if (hr != 0) { Log.Info($"picture: DwmRegisterThumbnail {w} failed 0x{hr:X8}"); return false; }
         pictures[w.Hwnd] = new Picture { Thumb = thumb };
@@ -100,27 +108,31 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     /// Pictures wholly outside the view are hidden, and unchanged ones aren't sent again.
     public void Layout(IReadOnlyList<CanvasWindow> windows, Camera camera, RectD view)
     {
-        foreach (var w in windows)
+        foreach (var w in windows) Moved(w, camera, view);
+    }
+
+    public bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness) => false;
+
+    public void Moved(CanvasWindow w, Camera camera, RectD view)
+    {
+        if (!pictures.TryGetValue(w.Hwnd, out var p)) return;
+        var r = camera.ToView(w.Frame);
+        bool visible = r.Intersects(view) && r.W >= 1 && r.H >= 1;
+        var destRect = r.Round();
+        if (visible == p.Visible && (!visible || Same(destRect, p.Dest))) return;
+        var props = new DWM_THUMBNAIL_PROPERTIES
         {
-            if (!pictures.TryGetValue(w.Hwnd, out var p)) continue;
-            var r = camera.ToView(w.Frame);
-            bool visible = r.Intersects(view) && r.W >= 1 && r.H >= 1;
-            var destRect = r.Round();
-            if (visible == p.Visible && (!visible || Same(destRect, p.Dest))) continue;
-            var props = new DWM_THUMBNAIL_PROPERTIES
-            {
-                dwFlags = Dwm.DWM_TNP_RECTDESTINATION | Dwm.DWM_TNP_RECTSOURCE | Dwm.DWM_TNP_VISIBLE |
-                          Dwm.DWM_TNP_OPACITY | Dwm.DWM_TNP_SOURCECLIENTAREAONLY,
-                rcDestination = destRect,
-                rcSource = w.SourceRect,
-                opacity = 255,
-                fVisible = visible ? 1 : 0,
-                fSourceClientAreaOnly = 0,
-            };
-            Dwm.DwmUpdateThumbnailProperties(p.Thumb, ref props);
-            p.Dest = destRect;
-            p.Visible = visible;
-        }
+            dwFlags = Dwm.DWM_TNP_RECTDESTINATION | Dwm.DWM_TNP_RECTSOURCE | Dwm.DWM_TNP_VISIBLE |
+                      Dwm.DWM_TNP_OPACITY | Dwm.DWM_TNP_SOURCECLIENTAREAONLY,
+            rcDestination = destRect,
+            rcSource = w.SourceRect,
+            opacity = 255,
+            fVisible = visible ? 1 : 0,
+            fSourceClientAreaOnly = 0,
+        };
+        Dwm.DwmUpdateThumbnailProperties(p.Thumb, ref props);
+        p.Dest = destRect;
+        p.Visible = visible;
     }
 
     public void Flush() { }

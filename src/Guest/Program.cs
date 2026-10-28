@@ -12,6 +12,8 @@ using static Expanse.Native.User32;
 //   click X Y        move there and left-click
 //   rclick X Y       move there and right-click
 //   drag X1 Y1 X2 Y2 press at X1,Y1, move to X2,Y2 in steps, release
+//   down / up        press / release the left button where the pointer is
+//   ctrl+drag ...    the same drag with Ctrl held
 //   key COMBO        e.g. ctrl+alt+grave, esc, alt+tab (sent as scan codes)
 //   wait MS
 // Results and errors go to out\guest.log (a desktop program has nowhere else to print).
@@ -58,6 +60,26 @@ try
                 Thread.Sleep(50);
                 Mouse(MOUSEEVENTF_LEFTUP);
                 Log($"drag {x1},{y1} -> {x2},{y2}");
+                break;
+            }
+            case "down": Mouse(MOUSEEVENTF_LEFTDOWN); Log("down"); break;
+            case "up": Mouse(MOUSEEVENTF_LEFTUP); Log("up"); break;
+            case "ctrl+drag":
+            {
+                int x1 = int.Parse(args[++i]), y1 = int.Parse(args[++i]), x2 = int.Parse(args[++i]), y2 = int.Parse(args[++i]);
+                Send(KeyInput(0x1D, up: false));
+                Move(x1, y1);
+                Thread.Sleep(50);
+                Mouse(MOUSEEVENTF_LEFTDOWN);
+                for (int step = 1; step <= 20; step++)
+                {
+                    Thread.Sleep(15);
+                    Move(x1 + (x2 - x1) * step / 20, y1 + (y2 - y1) * step / 20);
+                }
+                Thread.Sleep(50);
+                Mouse(MOUSEEVENTF_LEFTUP);
+                Send(KeyInput(0x1D, up: true));
+                Log($"ctrl+drag {x1},{y1} -> {x2},{y2}");
                 break;
             }
             case "key": Key(args[++i]); break;
