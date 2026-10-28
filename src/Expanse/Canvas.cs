@@ -1932,6 +1932,13 @@ sealed class Canvas
 
     void NoteAdminWindows(List<nint> found)
     {
+        // Off the canvas, an admin window is wherever you put it: a spot saved from when Expanse
+        // ran as administrator is stale, and taking it back later would move it out from under you.
+        foreach (var h in found)
+        {
+            GetWindowThreadProcessId(h, out uint pid);
+            savedPool.RemoveAll(e => e.Hwnd == h && e.Pid == pid);
+        }
         foreach (var h in found.Where(adminWindows.Add))
         {
             Log.Info($"admin window 0x{h:X} \"{Title(h)}\" stays off the canvas: Expanse isn't running as administrator");

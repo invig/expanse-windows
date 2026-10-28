@@ -176,9 +176,11 @@ backend, with 10 windows, in the same session:
    - **Run as administrator, the command pipe allows only SYSTEM and Administrators**: a
      medium-integrity expansectl gets access denied (checked), so other programs can't reach admin
      windows through Expanse.
-   - **Not checked end to end: switching to administrator**, from the tray or at start, which
-     shows a UAC prompt someone has to click. The hand-over back from administrator to normal was
-     tested (the elevated copy started by a scheduled task, `vm.sh start admin`); the other way
-     shares its code.
+   - **Both switches are tested end to end:** to administrator from the tray menu (Matthew
+     clicked Yes on the UAC prompt) and back (`ctl admin`). Not yet: starting with the setting on,
+     which asks at start.
+   - **Run normally, Expanse forgets admin windows' saved spots.** Kept, switching to
+     administrator later moved an admin window from where you'd been using it back to a spot
+     saved in an earlier admin session (off screen, in the test).
 
 5. Several monitors and mixed DPI.
