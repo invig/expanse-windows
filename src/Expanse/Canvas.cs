@@ -353,6 +353,7 @@ sealed class Canvas
     /// does goes back to its spot.
     public void Start()
     {
+        SetTimer(overlay.Hwnd, HotCornerTimer, 33, 0); // the hot corner's poll, 30 times a second
         ReadScreen();
         saved = LayoutStore.Load();
         if (saved != null) LayoutStore.ToDpi(saved, dpi);
@@ -1085,7 +1086,8 @@ sealed class Canvas
     // MARK: Closing
 
     const int CloseMinWidth = 220; // no × on pictures narrower than this (as on the Mac)
-    const nint CloseTimer = 7;
+    const nint CloseTimer = 7, HotCornerTimer = 8;
+    readonly HotCorner hotCorner = new();
 
     /// Whether `w` shows its × with the pointer over `pointer`: the window under the pointer
     /// shows one, and with it every window of the selection it's in. Not on small pictures, nor
@@ -1185,6 +1187,13 @@ sealed class Canvas
         null,
         new("Auto-Centre Focused Window", () => { settings.AutoCentre = !settings.AutoCentre; settings.Save(); }, settings.AutoCentre),
         new("Desktop Picture Background", () => { settings.Wallpaper = !settings.Wallpaper; settings.Save(); }, settings.Wallpaper),
+        new("Show Window Names", () => { settings.ShowNames = !settings.ShowNames; settings.Save(); }, settings.ShowNames),
+        new("Hot Corner", null, Children: HotCorner.Choices.Select(c => (Tray.Item?)new Tray.Item(c.title, () =>
+        {
+            settings.HotCorner = c.key;
+            settings.Save();
+            Log.Info($"hot corner: {c.key}");
+        }, settings.HotCorner == c.key)).ToList()),
         new("Tidy Up Windows", Tidy, Enabled: !paused),
         new(Elevation.IsElevated ? "Include Admin Windows" : "Include Admin Windows…", ToggleAdminWindows, Elevation.IsElevated, Enabled: !paused),
         new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
@@ -1664,6 +1673,13 @@ sealed class Canvas
                 KillTimer(overlay.Hwnd, SaveTimer);
                 Save();
                 return 0;
+            case WM_TIMER when wParam == HotCornerTimer:
+                if (!paused && !gliding && animation == null && drag == null && hotCorner.Poll(settings.HotCorner, monitor))
+                {
+                    Log.Info($"hot corner ({settings.HotCorner})");
+                    Toggle();
+                }
+                return 0;
             case WM_TIMER when wParam == CloseTimer:
                 KillTimer(overlay.Hwnd, CloseTimer);
                 CloseSettled();
@@ -1817,7 +1833,7 @@ sealed class Canvas
         }
         bool show = active && !gliding;
         double k = UiScale;
-        pictures.SetLabels(show ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
+        pictures.SetLabels(show && settings.ShowNames ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
         pictures.SetMarks(show ? CurrentMarks(k) : Marks.None, k);
         pictures.Present();
     }
@@ -1871,7 +1887,7 @@ sealed class Canvas
         nint oldBrush = Gdi32.SelectObject(hdc, pill);
         Gdi32.SetBkMode(hdc, Gdi32.TRANSPARENT);
         Gdi32.SetTextColor(hdc, Gdi32.RGB(240, 240, 240));
-        foreach (var (w, r) in Labels())
+        foreach (var (w, r) in settings.ShowNames ? Labels() : [])
         {
             string label = LabelText(w);
             var measure = new RECT(0, 0, 4000, 100);
@@ -1940,6 +1956,15 @@ sealed class Canvas
         {
             case "state": request.Reply(State()); break;
             case "windows": request.Reply(CanvasWindow.Describe()); break;
+            case "corner": // Hot Corner: off, all, topLeft, topRight, bottomLeft, bottomRight
+                if (HotCorner.Choices.Any(c => c.key == arg)) { settings.HotCorner = arg; settings.Save(); }
+                request.Reply($"hot corner {settings.HotCorner}");
+                break;
+            case "names": // Show Window Names on or off
+                settings.ShowNames = arg == "on";
+                settings.Save();
+                request.Reply($"window names {(settings.ShowNames ? "shown" : "hidden")}");
+                break;
             case "logging": // Detailed Logging on or off
                 if ((arg == "on") != settings.DetailedLogging) ToggleDetailedLogging();
                 request.Reply($"detailed logging {(settings.DetailedLogging ? "on" : "off")}");
@@ -2118,8 +2143,8 @@ sealed class Canvas
     {
         var lines = new[]
         {
-            $"Canvas: {windows.Count} windows, {(paused ? "paused" : "running")}, auto-centre {(settings.AutoCentre ? "on" : "off")}",
-            $"Desktop picture background {(settings.Wallpaper ? "on" : "off")}, pictures {pictures.Name}, detailed logging {(settings.DetailedLogging ? "on" : "off")}",
+            $"Canvas: {windows.Count} windows, {(paused ? "paused" : "running")}, auto-centre {(settings.AutoCentre ? "on" : "off")}, hot corner {settings.HotCorner}",
+            $"Desktop picture background {(settings.Wallpaper ? "on" : "off")}, window names {(settings.ShowNames ? "shown" : "hidden")}, pictures {pictures.Name}, detailed logging {(settings.DetailedLogging ? "on" : "off")}",
         };
         bool copied = BugReport.Copy(overlay.Hwnd, lines);
         Log.Info(copied ? "copied logs for a bug report" : "copy logs: the clipboard was busy");

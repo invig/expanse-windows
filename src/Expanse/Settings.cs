@@ -12,6 +12,14 @@ sealed class Settings
     /// The desktop picture behind the canvas; off, a plain dark background.
     public bool Wallpaper { get; set; } = true;
 
+    /// Hot Corner: which corner of the main screen zooms out when the pointer rests there (see
+    /// HotCorner for the choices and why the default is the top-left).
+    public string HotCorner { get; set; } = Expanse.HotCorner.Default;
+
+    /// Show Window Names: a label over each picture zoomed out (the app's name; the window's title
+    /// too on hover). Off, as on the Mac, where titles can be private.
+    public bool ShowNames { get; set; }
+
     /// Include Admin Windows: Expanse runs as administrator (Windows asks each time it starts) so
     /// it can move admin windows too. See Elevation.
     public bool RunAsAdmin { get; set; }

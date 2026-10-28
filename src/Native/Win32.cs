@@ -329,6 +329,7 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool ReleaseCapture();
     public const uint WM_CAPTURECHANGED = 0x0215;
     public const int MK_CONTROL = 0x8, VK_T = 0x54;
+    public const int VK_LBUTTON = 0x01, VK_RBUTTON = 0x02, VK_MBUTTON = 0x04, VK_C = 0x43;
     public const int MK_SHIFT = 0x4, VK_SPACE = 0x20, VK_A = 0x41, VK_W = 0x57, VK_0 = 0x30, VK_1 = 0x31,
         VK_NUMPAD0 = 0x60, VK_NUMPAD1 = 0x61, VK_ADD = 0x6B, VK_SUBTRACT = 0x6D, VK_OEM_PLUS = 0xBB, VK_OEM_MINUS = 0xBD;
     public const uint WM_KEYUP = 0x101, WM_MOUSEHWHEEL = 0x20E;
