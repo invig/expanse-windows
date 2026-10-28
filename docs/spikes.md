@@ -190,19 +190,33 @@ backend, with 10 windows, in the same session:
      middle of the view, chosen sizes, home spots, saved entries), so the fit agrees with Windows
      and resizes the windows it skipped. 125% -> 100% -> 125% came back to within a pixel. Layouts
      record their DPI and are converted on load.
-   - **Main screen only:** a window that turns up wholly on another monitor isn't taken on
-     (unless Expanse had it before: minimised, or saved by handle); one moved onto another monitor
-     leaves the canvas; one moved back joins where it's dropped. Partly on the main screen counts as
-     on it.
+   - **Main screen only:** a window that turns up on another monitor (and not on the main screen)
+     isn't taken on, unless Expanse had it before (minimised, or saved by handle); one moved onto
+     another monitor leaves the canvas; one moved back joins where it's dropped. A window off every
+     screen is taken on: left alone it would be out of reach.
    - **Parking:** a window wholly off the main screen whose spot is on another monitor, or nearer
      one than the main screen (it'd take that monitor's scaling), waits 32 px past an edge of the
-     main screen with no monitor beyond, the side it's heading first.
-   - **Tested with a pretend monitor only** (`ctl screen 1000 900` plus `ctl monitor 1000 0 440
-     900`: the right of the VM's screen acts as the second monitor). A real second monitor, and one
-     at a different scaling, need a second display. The VM has one; the port plan's Virtual
-     Display Driver would add more, but means installing a driver and trusting its certificate
-     (whether UTM can give Windows a second display isn't checked).
-   - **Known gap:** a window straddling the main screen's edge shows on the neighbouring monitor,
-     and if most of it is there and that monitor's scaling differs, Windows rescales it.
+     main screen that no other monitor reaches past at all, the side it's heading first. Clear at
+     its present size isn't enough: in the test a Notepad parked below the main screen grew by
+     1.25 as Windows rescaled it back to the main screen's scaling, reached the second monitor's
+     corner (1080 tall beside 900), and was taken for moved there.
+   - **Tested with a real second monitor at mixed scaling:** the main screen 1440x900 at 125%, a
+     Virtual Display Driver monitor 1920x1080 at 150% to its right. Parked windows all wait above
+     the main screen; a window moved onto the 150% monitor leaves the canvas (Windows rescales it
+     by 1.2) and comes back at its own size; one opened there is left alone; zoomed out, the other
+     monitor is untouched. Also with a pretend one (`ctl monitor X Y W H`).
+   - **Known gaps:** a window straddling the main screen's edge shows on the neighbouring monitor,
+     and if most of it is there and that monitor's scaling differs, Windows rescales it (seen: a
+     Notepad went 1426 -> 1142 wide; the canvas follows its size at the next sync). A maximised
+     window is restored and maximised again during a display change (a flicker).
+   - **The VM's second display:** UTM's own second display (`virtio-gpu-pci`) needs Red Hat's
+     plain (non-3D) driver, and installing that on one card applied it to the main card too, so it
+     was undone. The Virtual Display Driver (signed by SignPath, not Microsoft) is refused by Code
+     Integrity on Arm, so the VM now has Secure Boot off and test signing on (Matthew's steps), and
+     the driver installed from `C:\VirtualDisplayDriver`. UTM's SPICE agent (`vdservice`) resets the
+     display layout to one screen whenever a display changes: stop it to test two (`Stop-Service
+     vdservice`; it's back at the next boot), then extend (Settings > Display > Extend, or
+     SetDisplayConfig with SDC_TOPOLOGY_EXTEND). The guest helper's `res W H N`, `scale P N` and
+     `shotall` (`vm.sh shot FILE all`) take a display.
 
 6. Next: taskbar previews over the overlay, the minimised-window size bug above.

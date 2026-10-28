@@ -10,7 +10,7 @@
 #   scripts/vm.sh ctl CMD...       expansectl: state, zoomout, pick TITLE, back, bench S, log...
 #   scripts/vm.sh desk EXE [ARGS]  run a program on the VM's desktop (EXE in the VM's terms)
 #   scripts/vm.sh guest STEPS...   the Guest helper on the desktop: shot PATH | click X Y | key COMBO | wait MS
-#   scripts/vm.sh shot [FILE]      the VM's screen as a PNG (default out/shot.png)
+#   scripts/vm.sh shot [FILE] [all] the VM's screen as a PNG (default out/shot.png); all: every display
 #   scripts/vm.sh run CMD          run CMD over SSH (cmd.exe)
 #   scripts/vm.sh ps CMD           run a PowerShell command over SSH
 #   scripts/vm.sh snapshot NAME    save the VM's state; `restore NAME` goes back to it
@@ -118,10 +118,10 @@ case ${1:-} in
   ctl) shift; ctl "$@" ;;
   desk) shift; desk "$@" ;;
   guest) shift; guest "$@" ;;
-  shot)
+  shot) # `shot FILE all`: every display, not just the main one
     out=${2:-$ROOT/out/shot.png}
     mkdir -p "$(dirname "$out")"
-    guest shot "C:\\Users\\$VM_USER\\$REPO\\out\\shot.png"
+    guest "shot${3:+all}" "C:\\Users\\$VM_USER\\$REPO\\out\\shot.png"
     scp -O -q -i "$VM_KEY" -o BatchMode=yes "$VM_USER@$(vm_host):$REPO/out/shot.png" "$out"
     echo "$out"
     ;;

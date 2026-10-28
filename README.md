@@ -159,7 +159,8 @@ scripts/vm.sh start         # (re)start Expanse on the VM's desktop (`start admi
 scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, windows, log, pause, resume, bench 5, quit
 scripts/vm.sh ctl screen 640 480   # pretend the screen is that size (no size: the real one)
 scripts/vm.sh ctl monitor 1440 0 1920 1080   # pretend there's another monitor there (none: no pretend one)
-scripts/vm.sh guest scale 125      # the main display's scaling
+scripts/vm.sh guest scale 125      # the main display's scaling (`scale 150 2`: display 2's)
+scripts/vm.sh shot out/both.png all          # every display, not just the main one
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 scripts/vm.sh test          # the layout maths' tests
 ```

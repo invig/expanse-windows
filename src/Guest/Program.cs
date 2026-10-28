@@ -29,7 +29,12 @@ try
     {
         switch (args[i])
         {
-            case "shot": Shot(args[++i]); break;
+            case "shot": Shot(args[++i], monitor); break;
+            case "shotall": // every display: the whole virtual screen
+                Shot(args[++i], new RECT(GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+                    GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                    GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN)));
+                break;
             case "move": Move(int.Parse(args[++i]), int.Parse(args[++i])); break;
             case "click":
                 Move(int.Parse(args[++i]), int.Parse(args[++i]));
@@ -63,16 +68,21 @@ try
                 Log($"drag {x1},{y1} -> {x2},{y2}");
                 break;
             }
-            case "res":
+            case "res": // res W H [N]: display N (\\.\DISPLAYn), the main one if left out
             {
                 int w = int.Parse(args[++i]), h = int.Parse(args[++i]);
+                string? device = i + 1 < args.Length && int.TryParse(args[i + 1], out int n) ? $"\\\\.\\DISPLAY{n}" : null;
+                if (device != null) i++;
                 var mode = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>(), dmDeviceName = "", dmFormName = "" };
-                EnumDisplaySettings(null, -1, ref mode); // ENUM_CURRENT_SETTINGS
+                EnumDisplaySettings(device, -1, ref mode); // ENUM_CURRENT_SETTINGS
                 mode.dmPelsWidth = w;
                 mode.dmPelsHeight = h;
-                mode.dmFields = 0x80000 | 0x100000; // DM_PELSWIDTH | DM_PELSHEIGHT
-                int result = ChangeDisplaySettingsEx(null, ref mode, 0, 0, 0);
-                Log($"res {w}x{h}: {result}");
+                // Its position kept, stored, then applied for every display at once: changed on its
+                // own, a display's mode takes the others out of the desktop.
+                mode.dmFields = 0x80000 | 0x100000 | 0x20; // DM_PELSWIDTH | DM_PELSHEIGHT | DM_POSITION
+                int result = ChangeDisplaySettingsEx(device, ref mode, 0, 0x10000000 | 0x1, 0); // CDS_NORESET | CDS_UPDATEREGISTRY
+                if (result == 0) result = ApplyDisplaySettings(null, 0, 0, 0, 0);
+                Log($"res {device ?? "main"} {w}x{h}: {result}");
                 if (result != 0) throw new InvalidOperationException($"ChangeDisplaySettingsEx returned {result}");
                 break;
             }
@@ -105,7 +115,14 @@ try
             case "hwheel": Wheel(0x1000, int.Parse(args[++i])); break; // MOUSEEVENTF_HWHEEL
             case "wait": Thread.Sleep(int.Parse(args[++i])); break;
             case "cursor": Log($"cursor {CursorName()}"); break;
-            case "scale": SetScale(int.Parse(args[++i])); break; // the main display's scaling, in percent
+            case "scale": // scale P [N]: display N's scaling in percent (the first one if left out)
+            {
+                int percent = int.Parse(args[++i]);
+                string? device = i + 1 < args.Length && int.TryParse(args[i + 1], out int n) ? $"\\\\.\\DISPLAY{n}" : null;
+                if (device != null) i++;
+                SetScale(percent, device);
+                break;
+            }
             default: throw new ArgumentException($"unknown step {args[i]}");
         }
     }
@@ -117,21 +134,21 @@ catch (Exception e)
     return 1;
 }
 
-void Shot(string path)
+void Shot(string path, RECT area)
 {
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-    using var bmp = new Bitmap(monitor.Width, monitor.Height, PixelFormat.Format32bppRgb);
+    using var bmp = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppRgb);
     using (var g = Graphics.FromImage(bmp))
     {
         nint dst = g.GetHdc();
         nint screen = GetDC(0);
         // CAPTUREBLT includes layered windows (our UI layer sits in one).
-        Gdi32.BitBlt(dst, 0, 0, monitor.Width, monitor.Height, screen, monitor.Left, monitor.Top, Gdi32.SRCCOPY | Gdi32.CAPTUREBLT);
+        Gdi32.BitBlt(dst, 0, 0, area.Width, area.Height, screen, area.Left, area.Top, Gdi32.SRCCOPY | Gdi32.CAPTUREBLT);
         ReleaseDC(0, screen);
         g.ReleaseHdc(dst);
     }
     bmp.Save(path, ImageFormat.Png);
-    Log($"shot {path} {monitor.Width}x{monitor.Height}");
+    Log($"shot {path} {area.Width}x{area.Height} at {area.Left},{area.Top}");
 }
 
 void Move(int x, int y)
@@ -194,11 +211,13 @@ static extern bool EnumDisplaySettings(string? device, int mode, ref DEVMODE dev
 
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 static extern int ChangeDisplaySettingsEx(string? device, ref DEVMODE devMode, nint hwnd, uint flags, nint param);
+[DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "ChangeDisplaySettingsExW")]
+static extern int ApplyDisplaySettings(string? device, nint devMode, nint hwnd, uint flags, nint param);
 
 // The main display's scaling (Settings > Display > Scale), through the undocumented
 // DisplayConfig device-info types -3/-4 that Settings uses: the scale is set as steps from the
 // display's recommended one.
-void SetScale(int percent)
+void SetScale(int percent, string? device)
 {
     int[] steps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
     int want = Array.IndexOf(steps, percent);
@@ -208,9 +227,19 @@ void SetScale(int percent)
     var modeInfo = new byte[modes * 64];
     int qr = QueryDisplayConfig(2, ref paths, pathInfo, ref modes, modeInfo, 0);
     if (qr != 0 || paths == 0) throw new InvalidOperationException($"QueryDisplayConfig returned {qr}");
-    // The first active path's source: its adapter LUID and source id (the path's first 12 bytes).
-    long adapter = BitConverter.ToInt64(pathInfo, 0);
-    uint source = BitConverter.ToUInt32(pathInfo, 8);
+    // The display's path: each path (72 bytes) starts with its source's adapter LUID and id; the
+    // source's GDI name (\\.\DISPLAYn) picks the one asked for.
+    long adapter = 0;
+    uint source = 0;
+    bool found = false;
+    for (int p = 0; p < paths && !found; p++)
+    {
+        adapter = BitConverter.ToInt64(pathInfo, p * 72);
+        source = BitConverter.ToUInt32(pathInfo, p * 72 + 8);
+        var name = new SourceName { type = 1, size = (uint)Marshal.SizeOf<SourceName>(), adapter = adapter, id = source, gdiName = "" };
+        found = device == null || (DisplayConfigGetSourceName(ref name) == 0 && string.Equals(name.gdiName, device, StringComparison.OrdinalIgnoreCase));
+    }
+    if (!found) throw new ArgumentException($"no display {device}");
     var get = new DpiScaleGet { type = -3, size = (uint)Marshal.SizeOf<DpiScaleGet>(), adapter = adapter, id = source };
     if (DisplayConfigGetDeviceInfo(ref get) != 0) throw new InvalidOperationException("couldn't read the scale");
     int recommended = Math.Abs(get.minRel);
@@ -242,6 +271,8 @@ static extern int QueryDisplayConfig(uint flags, ref uint paths, byte[] pathInfo
 static extern int DisplayConfigGetDeviceInfo(ref DpiScaleGet info);
 [DllImport("user32.dll")]
 static extern int DisplayConfigSetDeviceInfo(ref DpiScaleSet info);
+[DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+static extern int DisplayConfigGetSourceName(ref SourceName info);
 
 static void Send(INPUT input)
 {
@@ -272,3 +303,7 @@ struct DpiScaleGet { public int type; public uint size; public long adapter; pub
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 struct DpiScaleSet { public int type; public uint size; public long adapter; public uint id; public int rel; }
+
+// DISPLAYCONFIG_SOURCE_DEVICE_NAME: the header, then the GDI name.
+[StructLayout(LayoutKind.Sequential, Pack = 4, CharSet = CharSet.Unicode)]
+struct SourceName { public int type; public uint size; public long adapter; public uint id; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string gdiName; }

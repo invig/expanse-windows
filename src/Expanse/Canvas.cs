@@ -169,8 +169,9 @@ sealed class Canvas
             {
                 // A window that turns up on another monitor is left alone (the Mac takes on only
                 // windows on its screen), unless it's one Expanse had: minimised, or parked by the
-                // Expanse that handed over (saved by its handle).
-                if (!OnMainScreen(Dwm.FrameBounds(h)) && !departed.ContainsKey(h) && !savedPool.Any(e => e.Hwnd == h))
+                // Expanse that handed over (saved by its handle). One off every screen is taken on:
+                // left alone it would be out of reach.
+                if (OnOtherMonitorOnly(Dwm.FrameBounds(h)) && !departed.ContainsKey(h) && !savedPool.Any(e => e.Hwnd == h))
                 {
                     if (elsewhere.Add(h)) Log.Info($"window 0x{h:X} \"{Title(h)}\" is on another monitor: left alone");
                     continue;
@@ -211,10 +212,11 @@ sealed class Canvas
                         w.Frame = w.Frame with { W = f.Width, H = f.Height };
                         w.Placed = null;
                     }
-                    else if (!OnMainScreen(f))
+                    else if (OnOtherMonitorOnly(f))
                     {
                         // You moved it onto another monitor: it's yours there, off the canvas, until
-                        // you bring it back.
+                        // you bring it back. (Off every screen it's still ours: one parked off the
+                        // main screen, nudged as Windows rescaled it.)
                         Log.Info($"window {w} moved to another monitor: off the canvas");
                         elsewhere.Add(h);
                         continue;
@@ -1379,6 +1381,9 @@ sealed class Canvas
     /// Whether a frame (screen coordinates) is at least partly on the main screen.
     bool OnMainScreen(RECT f) => Overlaps(f, monitor);
 
+    /// On another monitor and not on the main screen at all.
+    bool OnOtherMonitorOnly(RECT f) => !OnMainScreen(f) && otherMonitors.Any(m => Overlaps(f, m));
+
     static bool Overlaps(RECT a, RECT b) => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
 
     static double Gap(RECT a, RECT b)
@@ -1391,8 +1396,10 @@ sealed class Canvas
     /// Where a window wholly off the main screen waits. At its camera spot, if that's clear of
     /// the other monitors and nearer the main screen than any of them; otherwise it'd show on one,
     /// and take that monitor's scaling (Windows rescales a window by the monitor it's nearest).
-    /// Then just past the main screen's edge, on a side with no monitor, the side it's heading
-    /// first. Null: where it is will do (or no side is free).
+    /// Then just past the main screen's edge, the side it's heading first, on a side no other
+    /// monitor reaches past at all (a window can grow as it's parked, rescaled back to the main
+    /// screen's scaling, so being clear at its present size isn't enough); failing that, on a
+    /// side where it's clear. Null: where it is will do (or nowhere is).
     POINT? ParkingSpot(RECT f)
     {
         bool Clear(RECT r) => otherMonitors.All(m => !Overlaps(r, m) && Gap(r, m) > Gap(r, monitor));
@@ -1401,14 +1408,17 @@ sealed class Canvas
         int cx = monitor.Left + (monitor.Width - w) / 2, cy = monitor.Top + (monitor.Height - h) / 2;
         const int Margin = 32; // past the window's shadow
         RECT At(int x, int y) => new(x, y, x + w, y + h);
-        var sides = new (int beyond, RECT spot)[]
+        var sides = new (int beyond, bool open, RECT spot)[]
         {
-            (monitor.Top - f.Bottom, At(cx, monitor.Top - Margin - h)),
-            (f.Top - monitor.Bottom, At(cx, monitor.Bottom + Margin)),
-            (monitor.Left - f.Right, At(monitor.Left - Margin - w, cy)),
-            (f.Left - monitor.Right, At(monitor.Right + Margin, cy)),
+            (monitor.Top - f.Bottom, otherMonitors.All(m => m.Top >= monitor.Top), At(cx, monitor.Top - Margin - h)),
+            (f.Top - monitor.Bottom, otherMonitors.All(m => m.Bottom <= monitor.Bottom), At(cx, monitor.Bottom + Margin)),
+            (monitor.Left - f.Right, otherMonitors.All(m => m.Left >= monitor.Left), At(monitor.Left - Margin - w, cy)),
+            (f.Left - monitor.Right, otherMonitors.All(m => m.Right <= monitor.Right), At(monitor.Right + Margin, cy)),
         };
-        foreach (var (_, spot) in sides.OrderByDescending(s => s.beyond))
+        var order = sides.OrderByDescending(s => s.beyond).ToList();
+        foreach (var (_, open, spot) in order)
+            if (open) return new POINT(spot.Left, spot.Top);
+        foreach (var (_, _, spot) in order)
             if (Clear(spot)) return new POINT(spot.Left, spot.Top);
         return null;
     }
