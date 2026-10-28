@@ -31,7 +31,6 @@ sealed class Canvas
     bool gliding;  // up only to glide/dive into a window; input waits until it's handed back
     bool paused;   // windows put back; the canvas ignores events and the hotkey until resumed
     bool pendingSync; // windows came or went mid-glide: sync once it's handed back
-    nint settlingFocus;
     nint lastFocusedWindow; // the canvas window you were last in
     (nint hwnd, long at) lastOwnFocus;
     CanvasWindow? hovered;
@@ -45,6 +44,8 @@ sealed class Canvas
     /// where it put them.
     Vec liveOrigin;
     readonly List<CanvasWindow> closing = new(); // asked to close a moment ago
+    /// Dialogs that came and went in the last sync (for their pictures).
+    readonly List<CanvasWindow> ownedArrived = new(), ownedLeft = new();
     List<Layout.GuideLine> guides = new(); // snapping guides, canvas space
     bool guidesOverPictures;   // drawn by the pictures (shared visuals), not under them
     bool pendingTidy;          // Tidy Up from 100%: once zoomed out
@@ -144,6 +145,8 @@ sealed class Canvas
     public (List<CanvasWindow> added, List<CanvasWindow> removed) Sync()
     {
         var added = new List<CanvasWindow>();
+        ownedArrived.Clear();
+        ownedLeft.Clear();
         var found = CanvasWindow.Scan(); // topmost first
         var known = windows.ToDictionary(w => w.Hwnd);
         var next = new List<CanvasWindow>(found.Count);
@@ -152,7 +155,7 @@ sealed class Canvas
             nint h = found[i];
             if (!known.TryGetValue(h, out var w))
             {
-                w = new CanvasWindow(h);
+                w = new CanvasWindow(h) { Maximised = IsZoomed(h) };
                 w.Frame = ScreenToCanvas(w.ReadScreenFrame());
                 w.Preferred = w.Frame.Size;
                 Log.Info($"window {w} at {w.Frame}");
@@ -164,6 +167,13 @@ sealed class Canvas
                 var f = w.ReadScreenFrame();
                 if (!active)
                 {
+                    bool zoomed = IsZoomed(h);
+                    if (zoomed != w.Maximised && !w.RestoredByUs)
+                    {
+                        w.Maximised = zoomed;
+                        w.NormalRect = null;
+                        Log.Info($"window {w} {(zoomed ? "maximised" : "restored from maximised")}");
+                    }
                     var size = new SizeD(f.Width, f.Height);
                     bool ours = w.LastSized is SizeD l && Math.Abs(l.W - size.W) < 2 && Math.Abs(l.H - size.H) < 2;
                     if (userSized.Contains(h) && !ours && !suspendTracking && size != w.Preferred)
@@ -199,12 +209,95 @@ sealed class Canvas
             // Still there, just minimised, hidden or cloaked: it'll come back to its spot.
             if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone;
             Log.Info($"window {gone} {(IsWindow(gone.Hwnd) ? "left the canvas for now" : "gone")}");
+            ownedLeft.AddRange(gone.Owned);
+            gone.Owned.Clear();
         }
         foreach (var h in departed.Keys.Where(h => !IsWindow(h)).ToList()) departed.Remove(h);
         windows.Clear();
         windows.AddRange(next);
+        SyncOwned();
         return (added, removed);
     }
+
+    /// Dialogs and other owned windows, onto their owners (see CanvasWindow.Owner). At 100% each
+    /// is read from the screen unless it and its owner are where Expanse put them: you or the app
+    /// moved it, or its owner (which Windows doesn't move it with). Zoomed out they keep their
+    /// place by their owner.
+    void SyncOwned()
+    {
+        var byHwnd = windows.ToDictionary(w => w.Hwnd);
+        var found = new Dictionary<CanvasWindow, List<CanvasWindow>>();
+        foreach (var (h, root) in CanvasWindow.ScanOwned()) // topmost first
+        {
+            if (!byHwnd.TryGetValue(root, out var owner)) continue;
+            var o = owner.Owned.FirstOrDefault(x => x.Hwnd == h);
+            if (o == null)
+            {
+                o = new CanvasWindow(h) { Owner = owner };
+                o.Frame = ScreenToCanvas(o.ReadScreenFrame());
+                Log.Info($"dialog {o} of {owner} at {o.Frame}");
+                KeepWithOwner(o);
+                ownedArrived.Add(o);
+            }
+            else
+            {
+                o.Title = Title(h);
+                var f = o.ReadScreenFrame();
+                bool atPlaced = o.Placed is POINT p && p.X == f.Left && p.Y == f.Top;
+                if (!active && suspendTracking) o.Placed = null; // a display change: it goes back by its owner
+                if (!active && !suspendTracking && (!atPlaced || owner.Placed == null))
+                {
+                    o.Frame = ScreenToCanvas(f);
+                    o.Placed = null;
+                }
+                else o.Frame = o.Frame with { W = f.Width, H = f.Height };
+            }
+            if (!found.TryGetValue(owner, out var list)) found[owner] = list = new();
+            list.Add(o);
+        }
+        foreach (var w in windows)
+        {
+            var now = found.TryGetValue(w, out var list) ? Enumerable.Reverse(list).ToList() : new();
+            foreach (var gone in w.Owned.Except(now))
+            {
+                Log.Info($"dialog {gone} closed");
+                ownedLeft.Add(gone);
+            }
+            w.Owned.Clear();
+            w.Owned.AddRange(now);
+        }
+    }
+
+    /// A new dialog nowhere near its owner, while the owner is off screen (or zoomed out,
+    /// anywhere): the app put it where you'd see it (Windows centres a message box on the screen
+    /// when its owner isn't on one), but it belongs with its owner, so it goes in the middle of
+    /// it. Focus on it then glides there with its owner (FocusSettled).
+    void KeepWithOwner(CanvasWindow o)
+    {
+        var owner = o.Owner!;
+        if (o.Frame.Intersects(owner.Frame)) return;
+        if (!active && View.Contains(camera.ToView(owner.Frame))) return;
+        o.Frame = o.Frame with { X = Layout.Round(owner.Frame.MidX - o.Frame.W / 2), Y = Layout.Round(owner.Frame.MidY - o.Frame.H / 2) };
+        Log.Info($"dialog {o} opened away from {owner}: moved onto it, {o.Frame}");
+        if (!active) Place(o);
+    }
+
+    /// The canvas window `hwnd` is, or the one it belongs to (a dialog's owner).
+    CanvasWindow? CanvasWindowOf(nint hwnd)
+    {
+        if (hwnd == 0) return null;
+        nint root = CanvasWindow.RootOwner(hwnd);
+        return windows.FirstOrDefault(w => w.Hwnd == hwnd) ?? windows.FirstOrDefault(w => w.Hwnd == root);
+    }
+
+    /// `w`'s canvas frame changed: its picture, and its dialogs', follow.
+    void PictureMoved(CanvasWindow w)
+    {
+        foreach (var x in w.WithOwned()) pictures.Moved(x, camera, View);
+    }
+
+    /// Every picture, bottom-most first: each window, then its dialogs.
+    List<CanvasWindow> Stack() => windows.SelectMany(w => w.WithOwned()).ToList();
 
     /// The first sync: windows already open stay where they are.
     /// The first sync: the layout saved last time comes back (Mac: the first window scan). The
@@ -290,7 +383,7 @@ sealed class Canvas
 
     /// True while the canvas is a tightened version of the home layout: some window is smaller
     /// than its chosen size because this screen is smaller.
-    bool IsDerived => windows.Any(w => w.Preferred.W > 0 &&
+    bool IsDerived => windows.Any(w => !w.Maximised && w.Preferred.W > 0 &&
         (w.Frame.W < w.Preferred.W - AppRounding || w.Frame.H < w.Preferred.H - AppRounding));
 
     /// While no window is shrunk for a smaller screen, the canvas layout is the home layout. Not
@@ -322,7 +415,7 @@ sealed class Canvas
         var home = windows.Select(w =>
         {
             var o = w.Home ?? w.Frame.Origin;
-            var size = w.Preferred.W > 0 ? w.Preferred : w.Frame.Size;
+            var size = w.Preferred.W > 0 && !w.Maximised ? w.Preferred : w.Frame.Size;
             return new RectD(o.X, o.Y, size.W, size.H);
         }).ToArray();
         if (tidy)
@@ -330,7 +423,8 @@ sealed class Canvas
             Layout.TidyUp(home);
             for (int i = 0; i < windows.Count; i++) windows[i].Home = new Vec(Layout.Round(home[i].X), Layout.Round(home[i].Y));
         }
-        foreach (var w in windows)
+        // Maximised windows are the size Windows gives them (see Place).
+        foreach (var w in windows.Where(w => !w.Maximised))
         {
             var chosen = w.Preferred.W > 0 ? w.Preferred : w.Frame.Size;
             var target = new SizeD(Layout.Round(Math.Min(chosen.W, max.W)), Layout.Round(Math.Min(chosen.H, max.H)));
@@ -368,7 +462,7 @@ sealed class Canvas
     /// before going to it (the Mac's fitToScreen).
     void FitToScreen(CanvasWindow w)
     {
-        if (w.Preferred.W <= 0) return;
+        if (w.Preferred.W <= 0 || w.Maximised) return;
         var target = new SizeD(Layout.Round(Math.Min(w.Preferred.W, work.Width - ScreenMargin * 2)),
                                Layout.Round(Math.Min(w.Preferred.H, work.Height - ScreenMargin * 2)));
         if (Math.Abs(target.W - w.Frame.W) <= 1 && Math.Abs(target.H - w.Frame.H) <= 1) return;
@@ -403,8 +497,7 @@ sealed class Canvas
     void DisplaysChanging(int delayMs = 1000)
     {
         if (paused) return;
-        centreAfterResize ??= windows.FirstOrDefault(w => w.Hwnd == GetForegroundWindow())
-            ?? windows.FirstOrDefault(w => w.Hwnd == lastFocusedWindow);
+        centreAfterResize ??= CanvasWindowOf(GetForegroundWindow()) ?? CanvasWindowOf(lastFocusedWindow);
         suspendTracking = true;
         KillTimer(overlay.Hwnd, SettleTimer);
         SetTimer(overlay.Hwnd, RelayoutTimer, (uint)delayMs, 0);
@@ -439,7 +532,7 @@ sealed class Canvas
             // out), but there's no window to centre.
             overlay.Show(monitor, activate: false);
             FitLayoutToScreen(ScreenMargin, tidy: false);
-            foreach (var w in windows) pictures.Moved(w, camera, View);
+            foreach (var w in windows) PictureMoved(w);
             Relayout();
             screenResized = false;
             centreAfterResize = null;
@@ -453,7 +546,7 @@ sealed class Canvas
     {
         FitLayoutToScreen(ScreenMargin, tidy: false);
         if (screenResized && (centreAfterResize is CanvasWindow c && windows.Contains(c) ? c
-                : windows.FirstOrDefault(w => w.Hwnd == GetForegroundWindow())) is CanvasWindow w)
+                : CanvasWindowOf(GetForegroundWindow())) is CanvasWindow w)
         {
             camera = FocusCamera(w);
             Log.Info($"display change: centred on {w}");
@@ -510,8 +603,9 @@ sealed class Canvas
 
     CanvasWindow? WindowAt(Vec viewPoint)
     {
+        // A dialog's picture counts as its owner's.
         for (int i = windows.Count - 1; i >= 0; i--)
-            if (camera.ToView(windows[i].Frame).Contains(viewPoint)) return windows[i];
+            if (windows[i].WithOwned().Any(w => camera.ToView(w.Frame).Contains(viewPoint))) return windows[i];
         return null;
     }
 
@@ -529,7 +623,7 @@ sealed class Canvas
         if (windows.Count > 0 && windows[^1] == w) return;
         windows.Remove(w);
         windows.Add(w);
-        if (active) pictures.Raise(w);
+        if (active) foreach (var x in w.WithOwned()) pictures.Raise(x);
     }
 
     // MARK: Live tracking
@@ -543,11 +637,10 @@ sealed class Canvas
     void OnWindowEvent(uint ev, nint hwnd)
     {
         if (paused) return;
-        bool known = windows.Any(w => w.Hwnd == hwnd);
+        bool known = windows.Any(w => w.Hwnd == hwnd || w.Owned.Any(o => o.Hwnd == hwnd));
         switch (ev)
         {
             case EVENT_SYSTEM_FOREGROUND:
-                settlingFocus = hwnd;
                 SetTimer(overlay.Hwnd, FocusTimer, 120, 0);
                 break;
             case EVENT_OBJECT_NAMECHANGE:
@@ -597,14 +690,21 @@ sealed class Canvas
         if (suspendTracking && !active) Commit();
         ScheduleSave();
         // An arrival may have started a glide, whose pictures are already up.
-        if (!wasActive || gliding || (added.Count == 0 && removed.Count == 0)) return;
+        if (!wasActive || gliding || (added.Count == 0 && removed.Count == 0 && ownedArrived.Count == 0 && ownedLeft.Count == 0)) return;
         foreach (var w in removed)
         {
             pictures.Remove(w);
             if (hovered == w) hovered = null;
             selected.Remove(w);
         }
-        foreach (var w in added) pictures.Add(w);
+        foreach (var o in ownedLeft) pictures.Remove(o);
+        foreach (var w in added) foreach (var x in w.WithOwned()) pictures.Add(x);
+        // A dialog opening brings its window to the front, as it does at 100%.
+        foreach (var o in ownedArrived.Where(o => !added.Contains(o.Owner!)))
+        {
+            pictures.Add(o);
+            BringToFront(o.Owner!);
+        }
         Relayout();
     }
 
@@ -612,25 +712,32 @@ sealed class Canvas
     /// Alt-Tab while parked, say), glide to it: the Mac's auto-centre. Not when focus comes back
     /// to the window you were already in, from the taskbar, tray or Start menu: on the Mac,
     /// clicking the menu bar never took focus away in the first place.
-    void FocusSettled(nint hwnd)
+    ///
+    /// What counts is the window in front once focus has settled, not the last event's: a click
+    /// on a taskbar button whose window has a dialog up reports the taskbar, then activates the
+    /// dialog without an event of its own.
+    void FocusSettled()
     {
-        if (paused || active || animation != null || GetForegroundWindow() != hwnd) return;
+        nint hwnd = GetForegroundWindow();
+        if (paused || active || animation != null || hwnd == 0) return;
         // Our own hand-back just focused it.
         if (lastOwnFocus.hwnd == hwnd && Stopwatch.GetElapsedTime(lastOwnFocus.at).TotalSeconds < 1) return;
-        var w = windows.FirstOrDefault(x => x.Hwnd == hwnd);
-        if (w == null)
+        var w = CanvasWindowOf(hwnd);
+        if (w == null || (w.Hwnd != hwnd && w.Owned.All(o => o.Hwnd != hwnd)))
         {
             Sync();
-            w = windows.FirstOrDefault(x => x.Hwnd == hwnd);
+            w = CanvasWindowOf(hwnd);
             if (w == null) return;
         }
+        // Focus on a dialog: whether the dialog is in view is what counts, and its owner comes too.
+        var focused = w.Owned.FirstOrDefault(o => o.Hwnd == hwnd) ?? w;
         bool returning = w.Hwnd == lastFocusedWindow;
         lastFocusedWindow = w.Hwnd;
         if (returning || !settings.AutoCentre) return;
-        var r = camera.ToView(w.Frame);
+        var r = camera.ToView(focused.Frame);
         var screen = View.Inset(-1, -1);
         if (r.X >= screen.X && r.Y >= screen.Y && r.Right <= screen.Right && r.Bottom <= screen.Bottom) return;
-        Log.Info($"focus went to {w}, not fully on screen: glide to it");
+        Log.Info($"focus went to {focused}, not fully on screen: glide to {w}");
         Glide(w);
     }
 
@@ -657,7 +764,7 @@ sealed class Canvas
         var centre = camera.Center(ViewSize);
         RectD from;
         if (active) from = (hovered ?? windows.LastOrDefault())?.Frame ?? new RectD(centre.X, centre.Y, 0, 0);
-        else if (windows.FirstOrDefault(w => w.Hwnd == GetForegroundWindow()) is CanvasWindow current) from = current.Frame;
+        else if (CanvasWindowOf(GetForegroundWindow()) is CanvasWindow current) from = current.Frame;
         else from = new RectD(centre.X, centre.Y, 0, 0);
         if (Nearest(direction, from) is not CanvasWindow target) return;
         Log.Info($"hop {direction} to {target}");
@@ -821,7 +928,7 @@ sealed class Canvas
         foreach (var (w, start) in d.Moving)
         {
             w.Frame = new RectD(snapped.X + (start.X - bounds.X), snapped.Y + (start.Y - bounds.Y), start.W, start.H);
-            pictures.Moved(w, camera, View);
+            PictureMoved(w);
         }
         ShowGuides(lines);
         hovered = d.Clicked;
@@ -900,7 +1007,7 @@ sealed class Canvas
             foreach (var (w, _, to) in a.Moves)
             {
                 w.Frame = to;
-                pictures.Moved(w, camera, View);
+                PictureMoved(w);
             }
         a.Completion?.Invoke();
     }
@@ -928,7 +1035,8 @@ sealed class Canvas
         var r = camera.ToView(w.Frame);
         if (r.W < CloseMinWidth * k) return false;
         var c = Marks.CloseRect(r, k);
-        return !windows.Skip(windows.IndexOf(w) + 1).Any(f => camera.ToView(f.Frame).Intersects(c));
+        return !windows.Skip(windows.IndexOf(w) + 1).SelectMany(f => f.WithOwned()).Concat(w.Owned)
+            .Any(f => camera.ToView(f.Frame).Intersects(c));
     }
 
     /// Closes `w`, or the whole selection if it's part of one: each is sent WM_CLOSE, as its own
@@ -1047,12 +1155,12 @@ sealed class Canvas
         hovered = null;
         camera.Scale = 1;
         liveOrigin = camera.Origin;
-        if (!pictures.Attach(windows) && pictures is SharedVisualPictures)
+        if (!pictures.Attach(Stack()) && pictures is SharedVisualPictures)
         {
             Log.Info("pictures: shared visuals failed for every window; falling back to DWM thumbnails");
             pictures.Dispose();
             pictures = new ThumbnailPictures(overlay.Hwnd);
-            pictures.Attach(windows);
+            pictures.Attach(Stack());
         }
         Relayout();
         pictures.Flush();
@@ -1081,7 +1189,7 @@ sealed class Canvas
     {
         int lifted = 0;
         bool newOriginals = false;
-        foreach (var w in windows)
+        foreach (var w in Stack())
         {
             GetWindowRect(w.Hwnd, out var r);
             int fx = r.Left + w.Insets.Left, fy = r.Top + w.Insets.Top;
@@ -1134,13 +1242,14 @@ sealed class Canvas
         var t0 = Stopwatch.GetTimestamp();
         int moved = Commit();
         int waited = WaitForMoves();
-        var target = focus ?? windows.FirstOrDefault(w => w.Hwnd == previousForeground)
+        var target = focus ?? CanvasWindowOf(previousForeground)
             ?? windows.LastOrDefault(w => camera.ToView(w.Frame).Intersects(View));
         if (target != null && IsWindow(target.Hwnd))
         {
-            // A window asking something (a dialog it opened when asked to close) can't take focus
-            // itself: the dialog does.
-            nint to = IsWindowEnabled(target.Hwnd) ? target.Hwnd : GetLastActivePopup(target.Hwnd);
+            // Its dialog, if that's where you last were (or it's asking something, which leaves
+            // the window itself disabled).
+            nint popup = GetLastActivePopup(target.Hwnd);
+            nint to = popup != 0 && IsWindowVisible(popup) && IsWindowEnabled(popup) ? popup : target.Hwnd;
             lastFocus = $"{target}: {Focus(to)}";
             lastOwnFocus = (target.Hwnd, Stopwatch.GetTimestamp());
             lastFocusedWindow = target.Hwnd;
@@ -1169,10 +1278,35 @@ sealed class Canvas
         return moved;
     }
 
-    /// Moves one window to its camera spot. True if it had to move.
+    /// Moves one window to its camera spot, and its dialogs with it. True if it had to move.
     bool Place(CanvasWindow w, bool saveOriginals = true)
     {
+        bool moved = PlaceOne(w, saveOriginals);
+        foreach (var o in w.Owned) PlaceOne(o, saveOriginals: false);
+        return moved;
+    }
+
+    bool PlaceOne(CanvasWindow w, bool saveOriginals)
+    {
         var v = camera.ToView(w.Frame);
+        if (w.Maximised && !IsHungAppWindow(w.Hwnd))
+        {
+            // Where maximised windows sit, it's maximised; anywhere else it's an ordinary window
+            // of the same size, moved like any other (see CanvasWindow.Maximised).
+            bool home = Math.Abs(v.X - (work.Left - monitor.Left)) < 1 && Math.Abs(v.Y - (work.Top - monitor.Top)) < 1;
+            if (home && w.RestoredByUs)
+            {
+                w.Maximise();
+                Log.Info($"maximised {w} again");
+            }
+            else if (!home && IsZoomed(w.Hwnd))
+            {
+                if (w.Original == null) { GetWindowRect(w.Hwnd, out var before); w.Original = before; }
+                w.RestoreForMoving(work);
+                Originals.Save(windows); // it's to be maximised again if Expanse stops
+                Log.Info($"restored {w} from maximised to move it");
+            }
+        }
         int x = (int)Math.Round(v.X) + monitor.Left - w.Insets.Left;
         int y = (int)Math.Round(v.Y) + monitor.Top - w.Insets.Top;
         x = Math.Clamp(x, -30000, 30000);
@@ -1219,7 +1353,9 @@ sealed class Canvas
         nint before = GetForegroundWindow();
         string from = before == 0 ? "nothing" : $"\"{Title(before)}\"";
         bool returned = SetForegroundWindow(hwnd);
-        if (IsForeground(hwnd)) return $"direct (from {from})";
+        // Accepted, it can still take a while to show (a window just maximised, say): an Alt tap
+        // then would land in it, and WinUI apps show their key tips.
+        if (IsForeground(hwnd, returned ? 25 : 5)) return $"direct (from {from})";
         var steps = $"direct refused (returned {returned}, from {from})";
         TapAlt();
         returned = SetForegroundWindow(hwnd);
@@ -1235,9 +1371,9 @@ sealed class Canvas
     }
 
     /// The switch can take a moment to show up for another thread's window.
-    static bool IsForeground(nint hwnd)
+    static bool IsForeground(nint hwnd, int tries = 5)
     {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < tries; i++)
         {
             if (GetForegroundWindow() == hwnd) return true;
             Thread.Sleep(10);
@@ -1262,6 +1398,8 @@ sealed class Canvas
     Camera FocusCamera(CanvasWindow w)
     {
         double ax = work.Left - monitor.Left, ay = work.Top - monitor.Top;
+        // Maximised: exactly where maximised windows sit (Place maximises it there).
+        if (w.Maximised) return new Camera(new Vec(Math.Round(w.Frame.X - ax), Math.Round(w.Frame.Y - ay)), 1);
         double x = ax + (work.Width - w.Frame.W) / 2;
         double y = w.Frame.H > work.Height ? ay : ay + (work.Height - w.Frame.H) / 2;
         return new Camera(new Vec(Math.Round(w.Frame.X - x), Math.Round(w.Frame.Y - y)), 1);
@@ -1316,7 +1454,7 @@ sealed class Canvas
             foreach (var (w, from, to) in a.Moves)
             {
                 w.Frame = t >= 1 ? to : new RectD(Lerp(from.X, to.X, e), Lerp(from.Y, to.Y, e), to.W, to.H);
-                pictures.Moved(w, camera, View);
+                PictureMoved(w);
             }
         Relayout();
         double layout = Ms(l0);
@@ -1376,7 +1514,7 @@ sealed class Canvas
                 return 0;
             case WM_TIMER when wParam == FocusTimer:
                 KillTimer(overlay.Hwnd, FocusTimer);
-                FocusSettled(settlingFocus);
+                FocusSettled();
                 return 0;
             case Tray.WM_TRAY:
                 tray.Handle(wParam, lParam, () => { if (paused) Resume(); else Toggle(); }, TrayMenu);
@@ -1503,7 +1641,7 @@ sealed class Canvas
     /// screen at once.
     void Relayout()
     {
-        pictures.Layout(windows, camera, View);
+        pictures.Layout(Stack(), camera, View);
         Redraw();
     }
 
@@ -1640,6 +1778,7 @@ sealed class Canvas
         switch (verb)
         {
             case "state": request.Reply(State()); break;
+            case "windows": request.Reply(CanvasWindow.Describe()); break;
             case "log": request.Reply(Log.Recent(int.TryParse(arg, out int n) ? n : 60)); break;
             case "toggle": Toggle(); WhenIdle(request); break;
             case "zoomout": Enter(zoomOut: true); WhenIdle(request); break;
@@ -1770,6 +1909,8 @@ sealed class Canvas
                 canvas = w.Frame.ToString(),
                 view = camera.ToView(w.Frame).ToString(),
                 screen = Dwm.FrameBounds(w.Hwnd).ToRectD().ToString(),
+                owned = w.Owned.Select(o => $"{o} canvas {o.Frame} screen {Dwm.FrameBounds(o.Hwnd).ToRectD()}"),
+                maximised = w.Maximised ? (w.RestoredByUs ? "restored by Expanse" : "yes") : null,
             }),
         }, new JsonSerializerOptions { WriteIndented = true });
     }

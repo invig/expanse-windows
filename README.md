@@ -69,6 +69,15 @@ Early days. What works so far:
   last one is 15 minutes old; the newest three are kept. Picking one puts every window back where
   it had them, fitted to this screen and shown zoomed out. The layout it replaces becomes a
   snapshot, so you can go back.
+- **Dialogs go with their window.** Windows doesn't move a dialog (Find, Properties, "Save
+  changes?") when its owner moves, so Expanse does: each keeps its place by its window, moves and
+  shows with it zoomed out, and clicking its picture goes to the window. Move a dialog yourself and
+  it keeps the new place. A dialog that opens while its window is off screen goes onto its window,
+  and clicking the window's taskbar button (or anything that focuses the dialog) glides there.
+- **Maximised windows are screen-sized windows on the canvas.** Windows won't move a maximised
+  window, so when the view moves off one, Expanse makes it an ordinary window of the same size to
+  move it, and maximises it again when you come back to it. Un-maximising it yourself gives you
+  back your own size.
 - **Pausing or quitting** puts every window back where it was before Expanse moved it, as does the
   next start after a crash (`Expanse.exe --restore` does it by hand).
 
@@ -130,7 +139,7 @@ the signed-in session (`scripts/guest/desk.ps1`).
 scripts/vm.sh setup         # once: OpenSSH with this Mac's key, the .NET 10 SDK
 scripts/vm.sh build         # sync the source over and build everything
 scripts/vm.sh start         # (re)start Expanse on the VM's desktop
-scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, pause, resume, bench 5, quit
+scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, windows, log, pause, resume, bench 5, quit
 scripts/vm.sh ctl screen 640 480   # pretend the screen is that size (no size: the real one)
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 scripts/vm.sh test          # the layout maths' tests

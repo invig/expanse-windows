@@ -15,7 +15,6 @@ sealed class CanvasWindow
     /// What to call it: the exe's description ("Microsoft Edge"), as the Mac shows app names.
     public readonly string AppName;
     public string Title;
-    public RectD Frame;
     public RECT Insets;
     public SIZE WindowSize;
     /// Where we last put the visible frame on screen; a window found elsewhere was moved by
@@ -31,6 +30,75 @@ sealed class CanvasWindow
     public Vec? Home;
     /// The size Expanse last gave it, so our resizes aren't taken for yours.
     public SizeD? LastSized;
+
+    /// You maximised it. Windows holds a maximised window to the screen (moving it does nothing),
+    /// so on the canvas it's a window the size of the work area: maximised while the camera has
+    /// it where maximised windows sit, and restored to a window of the same size (RestoredByUs)
+    /// to be moved anywhere else. NormalRect is the size and place you'd restore it to yourself.
+    public bool Maximised, RestoredByUs;
+    public RECT? NormalRect;
+
+    /// Restores a maximised window to an ordinary one of the same size in the same place, so it
+    /// can be moved. `work` is the work area (WINDOWPLACEMENT is relative to it).
+    public void RestoreForMoving(RECT work)
+    {
+        var wp = Placement();
+        NormalRect ??= wp.rcNormalPosition;
+        GetWindowRect(Hwnd, out var r);
+        var f = Dwm.FrameBounds(Hwnd);
+        wp.showCmd = SW_SHOWNOACTIVATE;
+        wp.rcNormalPosition = new RECT(r.Left - work.Left, r.Top - work.Top, r.Right - work.Left, r.Bottom - work.Top);
+        SetWindowPlacement(Hwnd, ref wp);
+        RestoredByUs = true;
+        // An ordinary window's borders differ from a maximised one's: its visible frame is made
+        // the maximised one's exactly.
+        ReadScreenFrame();
+        SetWindowPos(Hwnd, 0, f.Left - Insets.Left, f.Top - Insets.Top, f.Width + Insets.Left + Insets.Right,
+            f.Height + Insets.Top + Insets.Bottom, SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+        ReadScreenFrame();
+    }
+
+    /// Maximised again, restoring (when you un-maximise it) to the size and place you had.
+    public void Maximise()
+    {
+        var wp = Placement();
+        wp.showCmd = SW_SHOWMAXIMIZED;
+        if (NormalRect is RECT n) wp.rcNormalPosition = n;
+        SetWindowPlacement(Hwnd, ref wp);
+        RestoredByUs = false;
+        ReadScreenFrame();
+    }
+
+    WINDOWPLACEMENT Placement()
+    {
+        var wp = new WINDOWPLACEMENT { length = (uint)System.Runtime.InteropServices.Marshal.SizeOf<WINDOWPLACEMENT>() };
+        GetWindowPlacement(Hwnd, ref wp);
+        wp.flags = 0;
+        return wp;
+    }
+
+    /// A dialog or other owned window (Find, Properties, "Save changes?") belongs to a canvas
+    /// window, its Owner, and isn't on the canvas by itself. Windows doesn't move owned windows
+    /// with their owner, so Expanse does: its frame is kept relative to the owner's, and goes
+    /// wherever the owner goes.
+    public CanvasWindow? Owner;
+    /// This window's owned windows, bottom-most first.
+    public readonly List<CanvasWindow> Owned = new();
+    RectD frame;
+    Vec ownerOffset;
+
+    public RectD Frame
+    {
+        get => Owner is CanvasWindow o ? new RectD(o.Frame.X + ownerOffset.X, o.Frame.Y + ownerOffset.Y, frame.W, frame.H) : frame;
+        set
+        {
+            if (Owner is CanvasWindow o) ownerOffset = new Vec(value.X - o.Frame.X, value.Y - o.Frame.Y);
+            frame = value;
+        }
+    }
+
+    /// The window and its owned windows, bottom-most first: the order their pictures stack in.
+    public IEnumerable<CanvasWindow> WithOwned() => Owned.Prepend(this);
 
     public CanvasWindow(nint hwnd)
     {
@@ -96,6 +164,60 @@ sealed class CanvasWindow
             return true;
         }, 0);
         return found;
+    }
+
+    /// Owned windows with a title bar (dialogs, palettes), topmost first, each with the canvas
+    /// window it belongs to (its root owner). Tooltips, menus and drop-downs have no title bar and
+    /// don't count; nor do owned windows with their own taskbar button, which Scan takes.
+    public static List<(nint hwnd, nint owner)> ScanOwned()
+    {
+        var found = new List<(nint, nint)>();
+        uint self = Kernel32.GetCurrentProcessId();
+        EnumWindows((h, _) =>
+        {
+            if (IsOwned(h, self)) found.Add((h, RootOwner(h)));
+            return true;
+        }, 0);
+        return found;
+    }
+
+    /// The end of `h`'s chain of owners (`h` itself if it has none). GetAncestor's GA_ROOTOWNER
+    /// only follows owners of popups, not of ordinary owned windows (a WinForms dialog, say).
+    public static nint RootOwner(nint h)
+    {
+        for (int i = 0; i < 32 && GetWindow(h, GW_OWNER) is var o && o != 0; i++) h = o;
+        return h;
+    }
+
+    static bool IsOwned(nint h, uint self)
+    {
+        if (GetWindow(h, GW_OWNER) == 0 || !IsWindowVisible(h) || IsIconic(h)) return false;
+        long style = Style(h), ex = ExStyle(h);
+        if ((style & WS_CHILD) != 0 || (ex & WS_EX_APPWINDOW) != 0) return false;
+        if ((style & WS_CAPTION) != WS_CAPTION && ClassName(h) != "#32770") return false;
+        GetWindowThreadProcessId(h, out uint pid);
+        if (pid == self || Dwm.IsCloaked(h)) return false;
+        var f = Dwm.FrameBounds(h);
+        return f.Width >= 40 && f.Height >= 30;
+    }
+
+    /// Every visible top-level window, topmost first, with what decides whether it's on the
+    /// canvas (`ctl windows`, for diagnosing).
+    public static string Describe()
+    {
+        var lines = new List<string>();
+        uint self = Kernel32.GetCurrentProcessId();
+        EnumWindows((h, _) =>
+        {
+            if (!IsWindowVisible(h)) return true;
+            nint owner = GetWindow(h, GW_OWNER);
+            var f = Dwm.FrameBounds(h);
+            string kind = Belongs(h, self) ? "canvas" : IsOwned(h, self) ? "owned" : "-";
+            lines.Add($"0x{h:X} {kind,-6} {ClassName(h)} \"{User32.Title(h)}\" style 0x{Style(h):X} ex 0x{ExStyle(h):X} " +
+                      $"owner 0x{owner:X} root 0x{RootOwner(h):X} {f.Left},{f.Top} {f.Width}x{f.Height}");
+            return true;
+        }, 0);
+        return string.Join("\n", lines);
     }
 
     static bool Belongs(nint h, uint self)

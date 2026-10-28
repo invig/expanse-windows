@@ -146,4 +146,17 @@ backend, with 10 windows, in the same session:
    - **Restoring a minimised window that was parked off-screen** brought it back once at 1/1.25
      of its size (the VM's scale factor). Expanse doesn't resize windows, so this looks like
      Windows; not yet looked into.
-3. Dialogs should move with their owner. Then maximised windows, admin windows, several monitors and mixed DPI.
+3. ~~Dialogs move with their owner; maximised windows~~: done. Notes:
+   - **Owned windows** are found by walking `GW_OWNER` (GetAncestor's GA_ROOTOWNER only follows
+     popups' owners). Only ones with a title bar count, so tooltips, menus and drop-downs don't.
+   - **A maximised window can't be moved** with SetWindowPos: it stays at the screen's origin. It
+     is restored (SetWindowPlacement, its normal rect set to where it is) to move it, and
+     maximised again at its spot, with your own normal rect put back.
+   - **A taskbar click on a window with a dialog up** reports the taskbar as the foreground
+     change and activates the dialog without an event, so focus handling looks at the window in
+     front when things settle rather than the last event's.
+   - **SetForegroundWindow can accept** yet take more than 50 ms to show (just after a maximise):
+     tapping Alt then lands in the window and WinUI apps show their key tips, so an accepted
+     switch is given 250 ms.
+
+   Then admin windows, several monitors and mixed DPI.
