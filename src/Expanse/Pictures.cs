@@ -34,10 +34,27 @@ interface IPictures : IDisposable
     /// over its pictures (the caller draws them underneath instead).
     bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness);
 
+    /// Whether titles and the hover ring are drawn over the pictures (SetLabels, SetRing);
+    /// otherwise the overlay draws them on its backdrop, under the pictures.
+    bool DrawsDecorations { get; }
+
+    /// The titles to show, bottom-most window first, each centred above its picture (view
+    /// coordinates). `scale` is the DPI scale.
+    void SetLabels(IReadOnlyList<Label> labels, double scale);
+
+    /// The ring around the hovered picture, or none.
+    void SetRing(RectD? picture, double scale);
+
+    /// Puts everything changed since the last call on screen, in one go (one composition
+    /// commit): pictures, titles, ring and guides move together.
+    void Present();
+
     /// Waits until the last layout is on screen: before the overlay is shown, so it never
     /// appears without its pictures.
     void Flush();
 }
+
+readonly record struct Label(nint Hwnd, string Text, RectD Picture);
 
 static class Pictures
 {
@@ -47,7 +64,7 @@ static class Pictures
         if (kind != "dwm")
         {
             try { return new SharedVisualPictures(overlay, failForTesting: kind == "shared-fail"); }
-            catch (Exception e) { Log.Info($"pictures: no shared visuals ({e.Message}); using DWM thumbnails"); }
+            catch (Exception e) { Log.Info($"pictures: no shared visuals, using DWM thumbnails: {e}"); }
         }
         return new ThumbnailPictures(overlay);
     }
@@ -112,6 +129,10 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     }
 
     public bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness) => false;
+    public bool DrawsDecorations => false;
+    public void SetLabels(IReadOnlyList<Label> labels, double scale) { }
+    public void SetRing(RectD? picture, double scale) { }
+    public void Present() { }
 
     public void Moved(CanvasWindow w, Camera camera, RectD view)
     {

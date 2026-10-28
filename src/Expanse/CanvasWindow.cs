@@ -10,7 +10,10 @@ sealed class CanvasWindow
     public readonly nint Hwnd;
     public readonly uint Pid;
     public readonly string Class;
+    /// The exe's name ("msedge").
     public readonly string App;
+    /// What to call it: the exe's description ("Microsoft Edge"), as the Mac shows app names.
+    public readonly string AppName;
     public string Title;
     public RectD Frame;
     public RECT Insets;
@@ -26,8 +29,28 @@ sealed class CanvasWindow
         Hwnd = hwnd;
         GetWindowThreadProcessId(hwnd, out Pid);
         Class = ClassName(hwnd);
-        App = Path.GetFileNameWithoutExtension(Kernel32.ProcessPath(Pid) ?? "?");
+        string? path = Kernel32.ProcessPath(Pid);
+        App = Path.GetFileNameWithoutExtension(path ?? "?");
         Title = User32.Title(hwnd);
+        AppName = DisplayName(path, App, Title);
+    }
+
+    static readonly Dictionary<string, string> displayNames = new(StringComparer.OrdinalIgnoreCase);
+
+    static string DisplayName(string? path, string app, string title)
+    {
+        // Store apps all run in ApplicationFrameHost; their window title is the app's name.
+        if (app.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) return title;
+        if (app.Equals("explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
+        if (path == null) return app;
+        if (!displayNames.TryGetValue(path, out var name))
+        {
+            try { name = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileDescription?.Trim(); }
+            catch (Exception) { name = null; }
+            if (name != null && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name = name[..^4]; // Notepad's says "Notepad.exe"
+            displayNames[path] = name = string.IsNullOrEmpty(name) ? app : name;
+        }
+        return name;
     }
 
     /// The visible frame on screen now, and the insets from the window rect, from the system.

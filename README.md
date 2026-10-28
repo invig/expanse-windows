@@ -9,7 +9,8 @@ one to glide straight to it.
 Early days. What works so far:
 
 - **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
-  layout): every window, live, at its spot on the canvas, with its title above it.
+  layout): every window, live, at its spot on the canvas, with its app's name above it (the window's
+  title too when the pointer is on it).
 - **Click a window** to glide to it at 100%, centred in the work area and focused. The other windows
   move with the canvas, off-screen if that's where the camera puts them.
 - <kbd>Ctrl</kbd> <kbd>Alt</kbd> + arrow keys **hop to the nearest window in that direction**,
@@ -60,6 +61,10 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
   visual, so the camera is a single transform per frame. The API is undocumented (dwmapi #147). If
   it's missing or fails, Expanse falls back to documented DWM thumbnails, one call per picture per
   frame. `Expanse.exe --pictures dwm` forces the fallback.
+- **Our UI is in the same tree, over the pictures:** titles (Direct2D/DirectWrite, drawn once per
+  text), the hover ring and snapping guides. Everything that moves with the camera changes in one
+  composition commit per frame. With the fallback, DWM draws its thumbnails over everything, so
+  titles and the ring go on the backdrop underneath.
 - **Off-screen windows come on-screen underneath the overlay** while it's up. GDI-drawn apps
   (classic Win32, Explorer's file list) only paint the parts of a window that are on a screen, so
   parked ones would otherwise show stale or empty pictures.

@@ -229,7 +229,7 @@ sealed class Canvas
                 if (windows.FirstOrDefault(w => w.Hwnd == hwnd) is CanvasWindow named)
                 {
                     named.Title = Title(hwnd);
-                    if (active && !gliding && animation == null) overlay.Invalidate();
+                    if (active && !gliding) Redraw();
                 }
                 break;
             case EVENT_OBJECT_LOCATIONCHANGE:
@@ -272,8 +272,7 @@ sealed class Canvas
             if (hovered == w) hovered = null;
         }
         foreach (var w in added) pictures.Add(w);
-        pictures.Layout(windows, camera, View);
-        if (animation == null) overlay.Invalidate();
+        Relayout();
     }
 
     /// A window got focus at 100%. If it isn't fully on screen (picked from the taskbar or
@@ -393,7 +392,7 @@ sealed class Canvas
         pictures.Moved(d.Window, camera, View);
         ShowGuides(lines);
         hovered = d.Window;
-        overlay.Invalidate();
+        Relayout();
     }
 
     void EndDrag(bool click)
@@ -404,7 +403,7 @@ sealed class Canvas
         ShowGuides(new());
         if (d.Moved) Log.Info($"dragged {d.Window} to {d.Window.Frame}");
         else if (click) { Log.Info($"click on {d.Window}"); Exit(d.Window); }
-        overlay.Invalidate();
+        Redraw();
     }
 
     void ShowGuides(List<Layout.GuideLine> lines)
@@ -482,7 +481,7 @@ sealed class Canvas
             pictures = new ThumbnailPictures(overlay.Hwnd);
             pictures.Attach(windows);
         }
-        pictures.Layout(windows, camera, View);
+        Relayout();
         pictures.Flush();
         overlay.Show(monitor, activate: zoomOut);
         Lift();
@@ -706,7 +705,9 @@ sealed class Canvas
         {
             From = camera, To = to, Start = Stopwatch.GetTimestamp(), Duration = duration, Completion = completion, Moves = moves,
         };
-        overlay.Repaint(); // labels and the hover ring off while moving
+        // GDI labels and the ring go while moving; the visual-tree ones move along (but not on a
+        // glide or dive: gliding hides them).
+        if (pictures.DrawsDecorations) Redraw(); else overlay.Repaint();
     }
 
     /// One frame: called by the message loop, which then waits for DWM's next composition.
@@ -737,7 +738,7 @@ sealed class Canvas
                 w.Frame = t >= 1 ? to : new RectD(Lerp(from.X, to.X, e), Lerp(from.Y, to.Y, e), to.W, to.H);
                 pictures.Moved(w, camera, View);
             }
-        pictures.Layout(windows, camera, View);
+        Relayout();
         double layout = Ms(l0);
         a.LayoutTotal += layout;
         bench?.Layouts.Add(layout);
@@ -750,7 +751,7 @@ sealed class Canvas
         a.Completion?.Invoke();
         if (animation == null)
         {
-            if (active && !gliding) overlay.Invalidate();
+            if (active && !gliding) Redraw();
             CompleteIdleWaiters();
         }
     }
@@ -824,8 +825,7 @@ sealed class Canvas
                 int delta = (short)((wParam >> 16) & 0xFFFF);
                 animation = null;
                 camera.Zoom(camera.Scale * Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top));
-                pictures.Layout(windows, camera, View);
-                overlay.Invalidate();
+                Relayout();
                 return 0;
             }
             case WM_KEYDOWN:
@@ -867,8 +867,51 @@ sealed class Canvas
         var w = WindowAt(p);
         if (w == hovered) return;
         hovered = w;
-        overlay.Invalidate();
+        Redraw();
     }
+
+    /// Positions the pictures for the camera, with the titles and hover ring, and puts it all on
+    /// screen at once.
+    void Relayout()
+    {
+        pictures.Layout(windows, camera, View);
+        Redraw();
+    }
+
+    /// Titles and the hover ring: in the pictures' visual tree when they can draw there, otherwise
+    /// on the overlay's backdrop (only while still: GDI can't keep up with the camera).
+    void Redraw()
+    {
+        if (!pictures.DrawsDecorations)
+        {
+            if (animation == null) overlay.Invalidate();
+            pictures.Present();
+            return;
+        }
+        bool show = active && !gliding;
+        double k = GetDpiForWindow(overlay.Hwnd) / 96.0;
+        pictures.SetLabels(show ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
+        pictures.SetRing(show && hovered != null ? camera.ToView(hovered.Frame) : null, k);
+        pictures.Present();
+    }
+
+    /// Windows that get a title, bottom-most first: not tiny, in view, and not with their top
+    /// under a window in front (the title would sit on that one's).
+    IEnumerable<(CanvasWindow w, RectD view)> Labels()
+    {
+        for (int i = 0; i < windows.Count; i++)
+        {
+            var r = camera.ToView(windows[i].Frame);
+            if (r.W < 80 || !r.Intersects(View)) continue;
+            var top = new Vec(r.X + r.W / 2, r.Y + 1);
+            if (windows.Skip(i + 1).Any(f => camera.ToView(f.Frame).Contains(top))) continue;
+            yield return (windows[i], r);
+        }
+    }
+
+    /// As on the Mac: the app's name; hovered, "App — window title".
+    string LabelText(CanvasWindow w) =>
+        w == hovered && w.Title.Length > 0 && w.Title != w.AppName ? $"{w.AppName} — {w.Title}" : w.AppName;
 
     // MARK: Drawing
 
@@ -878,6 +921,9 @@ sealed class Canvas
     {
         wallpaper.Draw(hdc, width, height, settings.Wallpaper);
         if (!active || gliding || animation != null) return;
+        // DWM thumbnails can't have anything drawn over them: titles, ring and guides go here,
+        // under them. Shared visuals draw all that in their own tree (Redraw).
+        if (pictures.DrawsDecorations) return;
         double k = GetDpiForWindow(overlay.Hwnd) / 96.0;
         nint font = Gdi32.CreateFont(-(int)(13 * k), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
         nint pill = Gdi32.CreateSolidBrush(Gdi32.RGB(32, 32, 34));
@@ -886,22 +932,17 @@ sealed class Canvas
         nint oldBrush = Gdi32.SelectObject(hdc, pill);
         Gdi32.SetBkMode(hdc, Gdi32.TRANSPARENT);
         Gdi32.SetTextColor(hdc, Gdi32.RGB(240, 240, 240));
-        for (int i = 0; i < windows.Count; i++)
+        foreach (var (w, r) in Labels())
         {
-            var w = windows[i];
-            var r = camera.ToView(w.Frame);
-            if (r.W < 80 || !r.Intersects(View)) continue;
-            // No label for a window whose top is under one in front: it would sit on that one's.
-            var top = new Vec(r.X + r.W / 2, r.Y + 1);
-            if (windows.Skip(i + 1).Any(f => camera.ToView(f.Frame).Contains(top))) continue;
+            string label = LabelText(w);
             var measure = new RECT(0, 0, 4000, 100);
-            DrawText(hdc, w.Title, -1, ref measure, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
+            DrawText(hdc, label, -1, ref measure, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
             int pad = (int)(10 * k), h = (int)(22 * k);
             int lw = (int)Math.Min(measure.Width + pad * 2, r.W);
             int lx = (int)(r.X + (r.W - lw) / 2), ly = (int)(r.Y - h - 6 * k);
             Gdi32.RoundRect(hdc, lx, ly, lx + lw, ly + h, h, h);
             var text = new RECT(lx + pad, ly, lx + lw - pad, ly + h);
-            DrawText(hdc, w.Title, -1, ref text, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+            DrawText(hdc, label, -1, ref text, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
         }
         if (hovered != null)
         {
@@ -962,8 +1003,7 @@ sealed class Canvas
                 if (!active || v.Length != 3) { request.Reply("view X Y SCALE, while zoomed out"); break; }
                 animation = null;
                 camera = new Camera(new Vec(v[0], v[1]), v[2]);
-                pictures.Layout(windows, camera, View);
-                overlay.Repaint();
+                Relayout();
                 request.Reply(State());
                 break;
             }

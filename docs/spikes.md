@@ -134,8 +134,6 @@ backend, with 10 windows, in the same session:
    Alt-Tab focuses a parked window, and the tray icon.
 2. ~~Hops on Ctrl+Alt+arrows; the layout maths ported with its tests~~ and ~~drag with snapping,
    Tidy Up, new windows in free space~~: done. Still to come:
-   - **Window titles in the visual tree.** They're drawn on the backdrop, under the pictures, so in
-     tight layouts a title can be hidden behind the picture above it.
    - **Tidy Up capping window sizes at the screen,** as the Mac does.
    - **Selecting several windows** (box-select, Shift-click) to drag them as a group.
    - **The saved layout,** and with it the home layout for smaller screens.
