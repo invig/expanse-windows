@@ -245,5 +245,11 @@ backend, with 10 windows, in the same session:
      (a tool window) stays up across a switch; the old desktop's windows are cloaked and leave the
      canvas, the new one's come back to their spots. Tiles show the desktop picture.
    - **Mac backlog items, not built on either:** window size snapping, low-motion mode.
+   - **DWM restarts** (the Mac's capture-service recovery): tested by killing `dwm.exe` in the VM,
+     at 100% and zoomed out. Before the fix, the pointer read as being in the top-left corner while
+     DWM was down (a false hot-corner zoom-out), frames came back with the invisible borders, and
+     every picture failed, so Expanse fell back to DWM thumbnails for good. Now it watches
+     `DwmIsCompositionEnabled`, waits a second after DWM's back, and makes new shared visuals
+     (about 1.5 s in the VM).
 
 7. Next: taskbar previews over the overlay.

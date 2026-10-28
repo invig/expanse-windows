@@ -90,10 +90,24 @@ sealed class SharedVisualPictures : IPictures
     readonly Dictionary<nint, Title> titleVisuals = new();
     readonly bool failForTesting;
     (double x, double y, double s)? lastCamera;
+    bool commitFailed;
 
     public string Name => "shared-visuals";
     public int Count => pictures.Count;
     public bool DrawsDecorations => true;
+
+    /// When DWM restarts (it does after a graphics driver reset or update) every shared
+    /// thumbnail and the DirectComposition device go with it; nothing draws until they're made
+    /// again. The Mac's equivalent is its capture service restarting.
+    public bool Lost
+    {
+        get
+        {
+            if (commitFailed) return true;
+            try { return d3d.DeviceRemovedReason.Failure; }
+            catch { return true; }
+        }
+    }
 
     /// `failForTesting`: every picture fails, to exercise the fallback (`pictures shared-fail`).
     public SharedVisualPictures(nint destination, bool failForTesting = false)
@@ -297,7 +311,11 @@ sealed class SharedVisualPictures : IPictures
     public void Present()
     {
         var commit = device.Commit();
-        if (commit.Failure) Log.Info($"pictures: commit failed {commit}");
+        if (commit.Failure)
+        {
+            if (!commitFailed) Log.Info($"pictures: commit failed {commit}");
+            commitFailed = true;
+        }
     }
 
     public void Flush() => device.WaitForCommitCompletion();

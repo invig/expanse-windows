@@ -491,6 +491,11 @@ public static class Dwm
     [DllImport(Dll)] public static extern int DwmGetWindowAttribute(nint hwnd, int attr, out int value, int size);
     [DllImport(Dll)] public static extern int DwmSetWindowAttribute(nint hwnd, int attr, ref int value, int size);
     [DllImport(Dll)] public static extern int DwmFlush();
+    [DllImport(Dll)] public static extern int DwmIsCompositionEnabled(out bool enabled);
+
+    /// False while DWM is down: it restarts after a graphics driver reset or update (or a crash),
+    /// and for a second or two there are no window pictures and no visible-frame reads.
+    public static bool Running => DwmIsCompositionEnabled(out bool on) == 0 && on;
 
     public static bool IsCloaked(nint hwnd) =>
         DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int c, sizeof(int)) == 0 && c != 0;

@@ -1360,6 +1360,11 @@ sealed class Canvas
             if (zoomOut && !gliding) Animate(OverviewCamera(), 0.22);
             return;
         }
+        if (!CompositorSettled)
+        {
+            Log.Info("compositor restarting: not zooming out yet");
+            return;
+        }
         ReadScreen();
         if (sync) Sync();
         previousForeground = GetForegroundWindow();
@@ -1368,6 +1373,11 @@ sealed class Canvas
         hovered = null;
         camera.Scale = 1;
         liveOrigin = camera.Origin;
+        if (pictures.Lost || picturesStale)
+        {
+            picturesStale = false;
+            RemakePictures();
+        }
         if (!pictures.Attach(Stack()) && pictures is SharedVisualPictures)
         {
             Log.Info("pictures: shared visuals failed for every window; falling back to DWM thumbnails");
@@ -1394,6 +1404,36 @@ sealed class Canvas
                 if (pendingRestore is SavedLayout restore) { pendingRestore = null; RestoreLayout(restore); }
             });
         }
+    }
+
+    bool compositorUp = true, picturesStale;
+    long compositorBackAt = -10_000;
+
+    /// Up, and for long enough that windows' frames and pictures can be read again.
+    bool CompositorSettled => compositorUp && Environment.TickCount64 - compositorBackAt > 1000;
+
+    /// DWM restarts after a graphics driver reset or update. While it's down there's nothing to
+    /// draw with; once it's back the pictures are made again (they died with it).
+    void WatchCompositor()
+    {
+        bool up = Dwm.Running;
+        if (up == compositorUp) return;
+        compositorUp = up;
+        Log.Info(up ? "compositor back" : "compositor stopped");
+        if (!up) return;
+        compositorBackAt = Environment.TickCount64;
+        picturesStale = true;
+        ScheduleSync(); // frames read while it was down are off by the invisible borders
+    }
+
+    /// The compositor restarted under us: the old pictures can't draw, so make a new set of the
+    /// same kind (see IPictures.Lost).
+    void RemakePictures()
+    {
+        string kind = pictures is SharedVisualPictures ? "shared" : "dwm";
+        Log.Info($"pictures: {pictures.Name} lost (the compositor restarted?); making new ones");
+        try { pictures.Dispose(); } catch (Exception e) { Log.Info($"pictures: dispose after loss: {e.Message}"); }
+        pictures = Pictures.Create(overlay.Hwnd, kind);
     }
 
     /// GDI-drawn apps (classic Win32, Explorer's file list) only paint the parts of a window
@@ -1808,6 +1848,7 @@ sealed class Canvas
         {
             case WM_TIMER when wParam == SyncTimer:
                 KillTimer(overlay.Hwnd, SyncTimer);
+                if (!CompositorSettled) { SetTimer(overlay.Hwnd, SyncTimer, 250, 0); return 0; }
                 SyncLive();
                 return 0;
             case WM_TIMER when wParam == RelayoutTimer:
@@ -1831,7 +1872,9 @@ sealed class Canvas
                 Save();
                 return 0;
             case WM_TIMER when wParam == HotCornerTimer:
+                WatchCompositor();
                 desktopInput.Armed = !active && !paused;
+                if (!CompositorSettled) { hotCorner.Disarm(); return 0; }
                 if (!paused && !gliding && animation == null && drag == null && hotCorner.Poll(settings.HotCorner, monitor))
                 {
                     Log.Info($"hot corner ({settings.HotCorner})");
@@ -1840,6 +1883,14 @@ sealed class Canvas
                 return 0;
             case WM_TIMER when wParam == DialogTimer:
                 KeepDialogsVisible();
+                if (active && CompositorSettled && (pictures.Lost || picturesStale))
+                {
+                    picturesStale = false;
+                    // The compositor restarted while zoomed out: new pictures, where the old were.
+                    RemakePictures();
+                    pictures.Attach(Stack());
+                    Relayout();
+                }
                 if (active && !gliding && animation == null) Redraw(); // the Desktops panel follows desktop changes
                 return 0;
             case WM_TIMER when wParam == CloseTimer:
@@ -2325,6 +2376,7 @@ sealed class Canvas
             active,
             gliding,
             pictures = pictures.Name,
+            picturesLost = pictures.Lost,
             paused,
             guides = guides.Select(g => $"{g.From.X:0},{g.From.Y:0} -> {g.To.X:0},{g.To.Y:0}"),
             guidesOverPictures,

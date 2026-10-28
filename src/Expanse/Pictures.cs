@@ -9,6 +9,10 @@ interface IPictures : IDisposable
     string Name { get; }
     int Count { get; }
 
+    /// True once the pictures can't be drawn any more (the compositor restarted, or the
+    /// graphics driver was reset), so the caller makes new ones.
+    bool Lost { get; }
+
     /// A picture for each window, bottom-most first. False if none could be made at all (so
     /// the caller can fall back to the other kind).
     bool Attach(IEnumerable<CanvasWindow> bottomToTop);
@@ -111,6 +115,7 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     readonly Dictionary<nint, Picture> pictures = new();
 
     public string Name => "dwm-thumbnails";
+    public bool Lost => false; // DWM's own: registered afresh on each Attach
     public int Count => pictures.Count;
 
     public bool Attach(IEnumerable<CanvasWindow> bottomToTop)

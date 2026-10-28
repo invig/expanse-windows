@@ -25,6 +25,14 @@ sealed class HotCorner
     long? enteredAt;
     bool armed = true;
 
+    /// Waits for the pointer to leave the corner before it can fire again: while DWM restarts the
+    /// pointer reads as being in the top-left corner.
+    public void Disarm()
+    {
+        armed = false;
+        enteredAt = null;
+    }
+
     /// One poll: true when the pointer has just rested in `corner` of `screen` long enough.
     public bool Poll(string corner, RECT screen)
     {

@@ -140,6 +140,9 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
   visual, so the camera is a single transform per frame. The API is undocumented (dwmapi #147). If
   it's missing or fails, Expanse falls back to documented DWM thumbnails, one call per picture per
   frame. `Expanse.exe --pictures dwm` forces the fallback.
+- **When DWM restarts** (after a graphics driver reset or update) the pictures die with it, as the
+  Mac's do when its capture service restarts. Expanse waits for it (no zooming out, no reading
+  window frames, no hot corner meanwhile) and then makes new pictures, in place if zoomed out.
 - **Our UI is in the same tree, over the pictures:** titles (Direct2D/DirectWrite, drawn once per
   text), the hover and selection rings and close buttons (each in its picture's place in the
   stack, so a window in front covers them), the marquee and snapping guides. Everything
