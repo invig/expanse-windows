@@ -93,7 +93,7 @@ sealed class SharedVisualPictures : IPictures
         return tried == 0 || pictures.Count > 0;
     }
 
-    bool Add(CanvasWindow w)
+    public bool Add(CanvasWindow w)
     {
         var props = new DWM_THUMBNAIL_PROPERTIES
         {
@@ -116,6 +116,15 @@ sealed class SharedVisualPictures : IPictures
         canvas.AddVisual(v, false, null); // no reference visual, not "above": on top of its siblings
         pictures[w.Hwnd] = new Picture(v, thumb);
         return true;
+    }
+
+    public void Remove(CanvasWindow w)
+    {
+        if (!pictures.Remove(w.Hwnd, out var p)) return;
+        canvas.RemoveVisual(p.Visual);
+        device.Commit();
+        Dwm.DwmUnregisterThumbnail(p.Thumb);
+        p.Visual.Dispose();
     }
 
     public void Raise(CanvasWindow w)

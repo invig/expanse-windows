@@ -10,6 +10,8 @@ using static Expanse.Native.User32;
 //   shot PATH        screenshot of the primary screen, as PNG
 //   move X Y         pointer to X,Y (physical pixels)
 //   click X Y        move there and left-click
+//   rclick X Y       move there and right-click
+//   drag X1 Y1 X2 Y2 press at X1,Y1, move to X2,Y2 in steps, release
 //   key COMBO        e.g. ctrl+alt+grave, esc, alt+tab (sent as scan codes)
 //   wait MS
 // Results and errors go to out\guest.log (a desktop program has nowhere else to print).
@@ -34,6 +36,30 @@ try
                 Mouse(MOUSEEVENTF_LEFTUP);
                 Log($"click {args[i - 1]},{args[i]}");
                 break;
+            case "rclick":
+                Move(int.Parse(args[++i]), int.Parse(args[++i]));
+                Thread.Sleep(30);
+                Mouse(MOUSEEVENTF_RIGHTDOWN);
+                Thread.Sleep(40);
+                Mouse(MOUSEEVENTF_RIGHTUP);
+                Log($"rclick {args[i - 1]},{args[i]}");
+                break;
+            case "drag":
+            {
+                int x1 = int.Parse(args[++i]), y1 = int.Parse(args[++i]), x2 = int.Parse(args[++i]), y2 = int.Parse(args[++i]);
+                Move(x1, y1);
+                Thread.Sleep(50);
+                Mouse(MOUSEEVENTF_LEFTDOWN);
+                for (int step = 1; step <= 20; step++)
+                {
+                    Thread.Sleep(15);
+                    Move(x1 + (x2 - x1) * step / 20, y1 + (y2 - y1) * step / 20);
+                }
+                Thread.Sleep(50);
+                Mouse(MOUSEEVENTF_LEFTUP);
+                Log($"drag {x1},{y1} -> {x2},{y2}");
+                break;
+            }
             case "key": Key(args[++i]); break;
             case "wait": Thread.Sleep(int.Parse(args[++i])); break;
             default: throw new ArgumentException($"unknown step {args[i]}");

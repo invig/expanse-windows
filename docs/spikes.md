@@ -127,8 +127,8 @@ backend, with 10 windows, in the same session:
 
 ## Next
 
-1. Live window tracking (`SetWinEventHook`): new, closed, moved, minimised and focus changes.
+1. ~~Live window tracking (`SetWinEventHook`)~~: done, along with the glide when the taskbar or
+   Alt-Tab focuses a parked window, and the tray icon.
 2. Hops on Ctrl+Alt+arrows; port the layout maths (nearest window, snapping, Tidy) with its
    tests; the saved layout.
-3. Picking a parked window from the taskbar or Alt-Tab should glide to it. Dialogs should move
-   with their owner. Then maximised windows, admin windows, several monitors and mixed DPI.
+3. Dialogs should move with their owner. Then maximised windows, admin windows, several monitors and mixed DPI.

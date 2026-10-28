@@ -13,6 +13,12 @@ interface IPictures : IDisposable
     /// the caller can fall back to the other kind).
     bool Attach(IEnumerable<CanvasWindow> bottomToTop);
 
+    /// A picture for a window that appeared while the canvas is up, on top of the others.
+    bool Add(CanvasWindow w);
+
+    /// Drops the picture of a window that's gone.
+    void Remove(CanvasWindow w);
+
     /// Puts `w`'s picture on top of the others.
     void Raise(CanvasWindow w);
 
@@ -65,11 +71,17 @@ sealed class ThumbnailPictures(nint dest) : IPictures
         return tried == 0 || pictures.Count > 0;
     }
 
-    void Add(CanvasWindow w)
+    public bool Add(CanvasWindow w)
     {
         int hr = Dwm.DwmRegisterThumbnail(dest, w.Hwnd, out nint thumb);
-        if (hr != 0) { Log.Info($"picture: DwmRegisterThumbnail {w} failed 0x{hr:X8}"); return; }
+        if (hr != 0) { Log.Info($"picture: DwmRegisterThumbnail {w} failed 0x{hr:X8}"); return false; }
         pictures[w.Hwnd] = new Picture { Thumb = thumb };
+        return true;
+    }
+
+    public void Remove(CanvasWindow w)
+    {
+        if (pictures.Remove(w.Hwnd, out var p)) Dwm.DwmUnregisterThumbnail(p.Thumb);
     }
 
     /// DWM stacks thumbnails in the order they're registered, so this registers it again.

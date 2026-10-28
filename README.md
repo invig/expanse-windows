@@ -14,8 +14,18 @@ Early days. What works so far:
   move with the canvas, off-screen if that's where the camera puts them.
 - <kbd>Esc</kbd> or the hotkey again goes back to where you were; the mouse wheel zooms around the
   pointer.
-- **Quitting** puts every window back where it was before Expanse moved it, as does the next start
-  after a crash (`Expanse.exe --restore` does it by hand).
+- **Windows are tracked live.** New windows join the canvas where they open, closed ones leave it,
+  and moving a window moves its spot. Zoomed out, pictures appear and disappear as windows come and
+  go.
+- **Picking a window that isn't fully on screen glides to it.** That covers the taskbar, Alt-Tab, or
+  an app bringing its window forward. This is the Mac's Auto-Centre, and it's on the tray menu.
+  Focus coming back to the window you were already in (after the taskbar or Start menu) doesn't
+  count.
+- **A tray icon** (Expanse's glyph from the Mac menu bar): click it to zoom out, right-click for
+  the menu: Open, Pause/Resume, Auto-Centre Focused Window, Desktop Picture Background, Quit.
+  Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep it in view.
+- **Pausing or quitting** puts every window back where it was before Expanse moved it, as does the
+  next start after a crash (`Expanse.exe --restore` does it by hand).
 
 C# / .NET 10, built for ARM64 for now (the dev VM). Live pictures are DWM's shared thumbnail
 visuals, with plain DWM thumbnails as the fallback. See [docs/spikes.md](docs/spikes.md) for why,
@@ -43,6 +53,9 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
   (`SetWindowPos`, asynchronous so a hung app can't stall it), waits for the ones in view to land,
   focuses the window and drops the overlay.
 - Animation runs a frame at a time on the UI thread, paced by `DwmFlush`.
+- **Window events** come from `SetWinEventHook`, out of context (nothing is injected into other
+  apps), on the UI thread. Comings, goings and moves are gathered into one sync 50 ms after the last
+  of them; focus acts where it settles, 120 ms later.
 
 ## Layout
 
@@ -65,9 +78,10 @@ the signed-in session (`scripts/guest/desk.ps1`).
 scripts/vm.sh setup         # once: OpenSSH with this Mac's key, the .NET 10 SDK
 scripts/vm.sh build         # sync the source over and build everything
 scripts/vm.sh start         # (re)start Expanse on the VM's desktop
-scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, bench 5, pictures dwm|shared, quit
+scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, pause, resume, bench 5, quit
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 ```
 
-Expanse logs to `%LOCALAPPDATA%\Expanse\expanse.log` in the VM (`scripts/vm.sh ctl log` shows the
+Settings live in `%LOCALAPPDATA%\Expanse\settings.json`. Expanse logs to
+`%LOCALAPPDATA%\Expanse\expanse.log` in the VM (`scripts/vm.sh ctl log` shows the
 end of it).

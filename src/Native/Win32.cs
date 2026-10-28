@@ -86,6 +86,28 @@ public struct WINDOWPLACEMENT
     public RECT rcNormalPosition;
 }
 
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct NOTIFYICONDATA
+{
+    public uint cbSize;
+    public nint hWnd;
+    public uint uID;
+    public uint uFlags;
+    public uint uCallbackMessage;
+    public nint hIcon;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+    public uint dwState;
+    public uint dwStateMask;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+    public uint uVersion;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+    public uint dwInfoFlags;
+    public Guid guidItem;
+    public nint hBalloonIcon;
+}
+
+public delegate void WinEventProc(nint hook, uint ev, nint hwnd, int idObject, int idChild, uint thread, uint time);
+
 [StructLayout(LayoutKind.Sequential)]
 public struct INPUT
 {
@@ -177,7 +199,7 @@ public static class User32
     public const uint INPUT_MOUSE = 0, INPUT_KEYBOARD = 1;
     public const uint KEYEVENTF_KEYUP = 0x2, KEYEVENTF_SCANCODE = 0x8, KEYEVENTF_EXTENDEDKEY = 0x1;
     public const uint MOUSEEVENTF_MOVE = 0x1, MOUSEEVENTF_LEFTDOWN = 0x2, MOUSEEVENTF_LEFTUP = 0x4,
-        MOUSEEVENTF_WHEEL = 0x800, MOUSEEVENTF_ABSOLUTE = 0x8000, MOUSEEVENTF_VIRTUALDESK = 0x4000;
+        MOUSEEVENTF_RIGHTDOWN = 0x8, MOUSEEVENTF_RIGHTUP = 0x10, MOUSEEVENTF_WHEEL = 0x800, MOUSEEVENTF_ABSOLUTE = 0x8000, MOUSEEVENTF_VIRTUALDESK = 0x4000;
 
     public static readonly nint DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4;
 
@@ -259,6 +281,33 @@ public static class User32
     public const uint DT_CENTER = 0x1, DT_VCENTER = 0x4, DT_SINGLELINE = 0x20, DT_CALCRECT = 0x400,
         DT_END_ELLIPSIS = 0x8000, DT_NOPREFIX = 0x800;
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetDpiForWindow(nint hwnd);
+
+    // WinEvents
+    public const uint EVENT_SYSTEM_FOREGROUND = 0x0003, EVENT_SYSTEM_MOVESIZESTART = 0x000A, EVENT_SYSTEM_MOVESIZEEND = 0x000B,
+        EVENT_SYSTEM_MINIMIZESTART = 0x0016, EVENT_SYSTEM_MINIMIZEEND = 0x0017,
+        EVENT_OBJECT_CREATE = 0x8000, EVENT_OBJECT_DESTROY = 0x8001, EVENT_OBJECT_SHOW = 0x8002, EVENT_OBJECT_HIDE = 0x8003,
+        EVENT_OBJECT_LOCATIONCHANGE = 0x800B, EVENT_OBJECT_NAMECHANGE = 0x800C,
+        EVENT_OBJECT_CLOAKED = 0x8017, EVENT_OBJECT_UNCLOAKED = 0x8018;
+    public const uint WINEVENT_OUTOFCONTEXT = 0, WINEVENT_SKIPOWNPROCESS = 2;
+    public const int OBJID_WINDOW = 0, CHILDID_SELF = 0;
+    public const uint GA_ROOT = 2;
+    [DllImport(Dll, CharSet = CharSet.Unicode)]
+    public static extern nint SetWinEventHook(uint min, uint max, nint module, WinEventProc proc, uint pid, uint thread, uint flags);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool UnhookWinEvent(nint hook);
+
+    // Menus
+    public const uint MF_STRING = 0, MF_GRAYED = 1, MF_CHECKED = 8, MF_SEPARATOR = 0x800;
+    public const uint TPM_RIGHTBUTTON = 2, TPM_RETURNCMD = 0x100, TPM_NONOTIFY = 0x80;
+    public const uint WM_NULL = 0, WM_CONTEXTMENU = 0x7B, WM_SETTINGCHANGE = 0x1A, WM_USER = 0x400;
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint CreatePopupMenu();
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool AppendMenu(nint menu, uint flags, nint id, string? text);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint TrackPopupMenu(nint menu, uint flags, int x, int y, int reserved, nint hwnd, nint rect);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool DestroyMenu(nint menu);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint RegisterWindowMessage(string name);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool DestroyIcon(nint icon);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetSystemMetricsForDpi(int index, uint dpi);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetDpiForSystem();
+    public const int SM_CXSMICON = 49;
 
     public static long Style(nint hwnd) => GetWindowLongPtr(hwnd, GWL_STYLE);
     public static long ExStyle(nint hwnd) => GetWindowLongPtr(hwnd, GWL_EXSTYLE);
@@ -359,6 +408,14 @@ public static class Dwm
         User32.GetWindowRect(hwnd, out r);
         return r;
     }
+}
+
+public static class Shell32
+{
+    public const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIM_SETVERSION = 4;
+    public const uint NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_SHOWTIP = 0x80;
+    public const uint NOTIFYICON_VERSION_4 = 4, NIN_SELECT = 0x400, NIN_KEYSELECT = 0x401;
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern bool Shell_NotifyIcon(uint message, ref NOTIFYICONDATA data);
 }
 
 public static class Kernel32

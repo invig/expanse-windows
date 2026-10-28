@@ -12,11 +12,14 @@ sealed class Wallpaper : IDisposable
     int width, height;
     string? path;
 
-    public void Draw(nint hdc, int w, int h)
+    public void Draw(nint hdc, int w, int h, bool enabled)
     {
-        string? current = CurrentPath();
-        if (dc == 0 || w != width || h != height || current != path) Load(current, w, h);
-        if (dc != 0) Gdi32.BitBlt(hdc, 0, 0, w, h, dc, 0, 0, Gdi32.SRCCOPY);
+        if (enabled)
+        {
+            string? current = CurrentPath();
+            if (dc == 0 || w != width || h != height || current != path) Load(current, w, h);
+        }
+        if (enabled && dc != 0) Gdi32.BitBlt(hdc, 0, 0, w, h, dc, 0, 0, Gdi32.SRCCOPY);
         else
         {
             var r = new RECT(0, 0, w, h);

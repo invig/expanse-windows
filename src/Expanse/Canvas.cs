@@ -18,6 +18,9 @@ sealed class Canvas
     readonly Overlay overlay;
     IPictures pictures;
     readonly Wallpaper wallpaper = new();
+    readonly Settings settings = Settings.Load();
+    readonly Tray tray;
+    readonly WinEvents events;
     /// Bottom-most first: the last window is the frontmost, as in the Mac app.
     readonly List<CanvasWindow> windows = new();
     readonly List<Request> idleWaiters = new();
@@ -26,6 +29,11 @@ sealed class Canvas
     RECT monitor, work;
     bool active;   // the overlay is up: zoomed out, or mid-glide
     bool gliding;  // up only to glide/dive into a window; input waits until it's handed back
+    bool paused;   // windows put back; the canvas ignores events and the hotkey until resumed
+    bool pendingSync; // windows came or went mid-glide: sync once it's handed back
+    nint settlingFocus;
+    nint lastFocusedWindow; // the canvas window you were last in
+    (nint hwnd, long at) lastOwnFocus;
     CanvasWindow? hovered;
     nint previousForeground;
     Animation? animation;
@@ -51,6 +59,9 @@ sealed class Canvas
         overlay.Painter = Paint;
         overlay.Handler = Handle;
         Log.Info($"screen {monitor}, work area {work}, dpi {GetDpiForWindow(overlay.Hwnd)}");
+        tray = new Tray(overlay.Hwnd);
+        events = new WinEvents(OnWindowEvent);
+        lastFocusedWindow = GetForegroundWindow();
     }
 
     public bool IsAnimating => animation != null;
@@ -60,9 +71,11 @@ sealed class Canvas
     // MARK: Windows
 
     /// Brings the window list up to date. At 100%, a window found somewhere other than where we
-    /// put it was moved by someone else, and its canvas spot follows it.
-    public void Sync()
+    /// put it was moved by someone else, and its canvas spot follows it. Returns the windows that
+    /// came and went.
+    public (List<CanvasWindow> added, List<CanvasWindow> removed) Sync()
     {
+        var added = new List<CanvasWindow>();
         var found = CanvasWindow.Scan(); // topmost first
         var known = windows.ToDictionary(w => w.Hwnd);
         var next = new List<CanvasWindow>(found.Count);
@@ -74,6 +87,7 @@ sealed class Canvas
                 w = new CanvasWindow(h);
                 w.Frame = ScreenToCanvas(w.ReadScreenFrame());
                 Log.Info($"window {w} at {w.Frame}");
+                added.Add(w);
             }
             else
             {
@@ -94,14 +108,20 @@ sealed class Canvas
             }
             next.Add(w);
         }
-        foreach (var gone in windows.Except(next)) Log.Info($"window {gone} gone");
+        var removed = windows.Except(next).ToList();
+        foreach (var gone in removed) Log.Info($"window {gone} gone");
         windows.Clear();
         windows.AddRange(next);
+        return (added, removed);
     }
 
-    /// At 100% (scale 1), canvas = screen - monitor origin + camera origin.
-    RectD ScreenToCanvas(RECT f) =>
-        new(f.Left - monitor.Left + camera.Origin.X, f.Top - monitor.Top + camera.Origin.Y, f.Width, f.Height);
+    /// Canvas = screen - monitor origin + the 100% camera's origin. Zoomed out, the real windows
+    /// are still where the camera you zoomed out from put them.
+    RectD ScreenToCanvas(RECT f)
+    {
+        var origin = active && returnCamera is Camera r ? r.Origin : camera.Origin;
+        return new(f.Left - monitor.Left + origin.X, f.Top - monitor.Top + origin.Y, f.Width, f.Height);
+    }
 
     CanvasWindow? WindowAt(Vec viewPoint)
     {
@@ -127,11 +147,134 @@ sealed class Canvas
         if (active) pictures.Raise(w);
     }
 
+    // MARK: Live tracking
+
+    const nint SyncTimer = 1, FocusTimer = 2;
+
+    /// A window event (see WinEvents). Nothing heavy happens here: comings and goings and moves
+    /// are gathered into one sync 50 ms after the last of them, and focus acts where it settles
+    /// 120 ms later (it often bounces, as on the Mac).
+    void OnWindowEvent(uint ev, nint hwnd)
+    {
+        if (paused) return;
+        bool known = windows.Any(w => w.Hwnd == hwnd);
+        switch (ev)
+        {
+            case EVENT_SYSTEM_FOREGROUND:
+                settlingFocus = hwnd;
+                SetTimer(overlay.Hwnd, FocusTimer, 120, 0);
+                break;
+            case EVENT_OBJECT_NAMECHANGE:
+                if (windows.FirstOrDefault(w => w.Hwnd == hwnd) is CanvasWindow named)
+                {
+                    named.Title = Title(hwnd);
+                    if (active && !gliding && animation == null) overlay.Invalidate();
+                }
+                break;
+            case EVENT_OBJECT_LOCATIONCHANGE:
+            case EVENT_SYSTEM_MOVESIZEEND:
+                // Zoomed out or gliding, windows move because we move them.
+                if (known && !active) ScheduleSync();
+                break;
+            case EVENT_OBJECT_SHOW:
+            case EVENT_OBJECT_UNCLOAKED:
+            case EVENT_SYSTEM_MINIMIZEEND:
+                if (GetAncestor(hwnd, GA_ROOT) == hwnd) ScheduleSync();
+                break;
+            case EVENT_OBJECT_HIDE:
+            case EVENT_OBJECT_DESTROY:
+            case EVENT_OBJECT_CLOAKED:
+            case EVENT_SYSTEM_MINIMIZESTART:
+                if (known) ScheduleSync();
+                break;
+        }
+    }
+
+    void ScheduleSync() => SetTimer(overlay.Hwnd, SyncTimer, 50, 0);
+
+    /// Sync, and zoomed out, pictures for windows that came and none for ones that went.
+    void SyncLive()
+    {
+        if (paused) return;
+        if (gliding) { pendingSync = true; return; }
+        var (added, removed) = Sync();
+        if (!active || (added.Count == 0 && removed.Count == 0)) return;
+        foreach (var w in removed)
+        {
+            pictures.Remove(w);
+            if (hovered == w) hovered = null;
+        }
+        foreach (var w in added) pictures.Add(w);
+        pictures.Layout(windows, camera, View);
+        if (animation == null) overlay.Invalidate();
+    }
+
+    /// A window got focus at 100%. If it isn't fully on screen (picked from the taskbar or
+    /// Alt-Tab while parked, say), glide to it: the Mac's auto-centre. Not when focus comes back
+    /// to the window you were already in, from the taskbar, tray or Start menu: on the Mac,
+    /// clicking the menu bar never took focus away in the first place.
+    void FocusSettled(nint hwnd)
+    {
+        if (paused || active || animation != null || GetForegroundWindow() != hwnd) return;
+        // Our own hand-back just focused it.
+        if (lastOwnFocus.hwnd == hwnd && Stopwatch.GetElapsedTime(lastOwnFocus.at).TotalSeconds < 1) return;
+        var w = windows.FirstOrDefault(x => x.Hwnd == hwnd);
+        if (w == null)
+        {
+            Sync();
+            w = windows.FirstOrDefault(x => x.Hwnd == hwnd);
+            if (w == null) return;
+        }
+        bool returning = w.Hwnd == lastFocusedWindow;
+        lastFocusedWindow = w.Hwnd;
+        if (returning || !settings.AutoCentre) return;
+        var r = camera.ToView(w.Frame);
+        var screen = View.Inset(-1, -1);
+        if (r.X >= screen.X && r.Y >= screen.Y && r.Right <= screen.Right && r.Bottom <= screen.Bottom) return;
+        Log.Info($"focus went to {w}, not fully on screen: glide to it");
+        Glide(w);
+    }
+
+    // MARK: Pause, tray menu
+
+    /// Puts every window back where it was before Expanse moved it and stops following them.
+    public void Pause()
+    {
+        if (paused || active) return;
+        Originals.Restore(windows);
+        paused = true;
+        tray.SetTip("Expanse (paused)");
+        Log.Info("paused");
+    }
+
+    /// Starts again from the windows as they are now, at 100%.
+    public void Resume()
+    {
+        if (!paused) return;
+        paused = false;
+        windows.Clear();
+        camera = Camera.Identity;
+        Sync();
+        tray.SetTip("Expanse");
+        Log.Info("resumed");
+    }
+
+    IReadOnlyList<Tray.Item?> TrayMenu() => new Tray.Item?[]
+    {
+        new("Open Expanse\tCtrl+Alt+`", () => Toggle(), Enabled: !paused),
+        new(paused ? "Resume Expanse" : "Pause Expanse", () => { if (paused) Resume(); else Pause(); }),
+        null,
+        new("Auto-Centre Focused Window", () => { settings.AutoCentre = !settings.AutoCentre; settings.Save(); }, settings.AutoCentre),
+        new("Desktop Picture Background", () => { settings.Wallpaper = !settings.Wallpaper; settings.Save(); }, settings.Wallpaper),
+        null,
+        new("Quit Expanse", Quit),
+    };
+
     // MARK: Zoom out, dive in
 
     public void Toggle()
     {
-        if (gliding) return;
+        if (gliding || paused) return;
         if (active) Exit(null); else Enter(zoomOut: true);
     }
 
@@ -235,6 +378,8 @@ sealed class Canvas
         if (target != null && IsWindow(target.Hwnd))
         {
             lastFocus = $"{target}: {Focus(target.Hwnd)}";
+            lastOwnFocus = (target.Hwnd, Stopwatch.GetTimestamp());
+            lastFocusedWindow = target.Hwnd;
             Log.Info($"focus {lastFocus}");
         }
         overlay.Hide();
@@ -243,6 +388,7 @@ sealed class Canvas
         gliding = false;
         returnCamera = null;
         Log.Info($"handed back: moved {moved} windows, waited {waited} frames, {Ms(t0):0}ms");
+        if (pendingSync) { pendingSync = false; SyncLive(); }
         CompleteIdleWaiters();
     }
 
@@ -276,17 +422,18 @@ sealed class Canvas
     int WaitForMoves()
     {
         var inView = windows.Where(w => camera.ToView(w.Frame).Intersects(View) && w.Placed != null).ToList();
+        bool Landed(CanvasWindow w)
+        {
+            var f = Dwm.FrameBounds(w.Hwnd);
+            return !IsWindow(w.Hwnd) || (f.Left == w.Placed!.Value.X && f.Top == w.Placed.Value.Y);
+        }
         for (int frame = 0; frame < 10; frame++)
         {
-            bool landed = inView.All(w =>
-            {
-                var f = Dwm.FrameBounds(w.Hwnd);
-                return !IsWindow(w.Hwnd) || (f.Left == w.Placed!.Value.X && f.Top == w.Placed.Value.Y);
-            });
-            if (landed) return frame;
+            if (inView.All(Landed)) return frame;
             Dwm.DwmFlush();
         }
-        Log.Info("hand-back: windows still moving after 10 frames");
+        var late = inView.Where(w => !Landed(w)).Select(w => $"{w} at {RectD.From(Dwm.FrameBounds(w.Hwnd))}, not {w.Placed!.Value.X},{w.Placed.Value.Y}");
+        Log.Info($"hand-back: still moving after 10 frames: {string.Join("; ", late)}");
         return 10;
     }
 
@@ -421,8 +568,27 @@ sealed class Canvas
 
     nint? Handle(uint msg, nint wParam, nint lParam)
     {
+        if (msg == tray.TaskbarCreated) { tray.Add(); return 0; }
         switch (msg)
         {
+            case WM_TIMER when wParam == SyncTimer:
+                KillTimer(overlay.Hwnd, SyncTimer);
+                SyncLive();
+                return 0;
+            case WM_TIMER when wParam == FocusTimer:
+                KillTimer(overlay.Hwnd, FocusTimer);
+                FocusSettled(settlingFocus);
+                return 0;
+            case Tray.WM_TRAY:
+                tray.Handle(wParam, lParam, () => { if (paused) Resume(); else Toggle(); }, TrayMenu);
+                // The menu needed our (hidden) window in front; give focus back to the window you
+                // were in, unless the canvas just opened.
+                if (!active && GetForegroundWindow() == overlay.Hwnd && IsWindow(lastFocusedWindow))
+                    SetForegroundWindow(lastFocusedWindow);
+                return 0;
+            case WM_SETTINGCHANGE when lParam != 0 && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet":
+                tray.ThemeChanged();
+                return null;
             case WM_HOTKEY:
                 Log.Info("hotkey");
                 Toggle();
@@ -489,7 +655,7 @@ sealed class Canvas
     /// the one under the pointer. Both sit outside the pictures, so DWM doesn't cover them.
     void Paint(nint hdc, int width, int height)
     {
-        wallpaper.Draw(hdc, width, height);
+        wallpaper.Draw(hdc, width, height, settings.Wallpaper);
         if (!active || gliding || animation != null) return;
         double k = GetDpiForWindow(overlay.Hwnd) / 96.0;
         nint font = Gdi32.CreateFont(-(int)(13 * k), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
@@ -576,12 +742,19 @@ sealed class Canvas
                 request.Reply(pictures.Name);
                 break;
             case "bench": StartBench(request, double.TryParse(arg, out double secs) ? secs : 5); break;
+            case "pause": Pause(); request.Reply(State()); break;
+            case "resume": Resume(); request.Reply(State()); break;
+            case "autocentre":
+                settings.AutoCentre = arg != "off";
+                settings.Save();
+                request.Reply($"auto-centre {(settings.AutoCentre ? "on" : "off")}");
+                break;
             case "quit":
                 request.Reply("bye");
                 Quit();
                 break;
             default:
-                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, bench [SECONDS], quit");
+                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, pause, resume, autocentre on|off, bench [SECONDS], quit");
                 break;
         }
     }
@@ -608,6 +781,8 @@ sealed class Canvas
             active,
             gliding,
             pictures = pictures.Name,
+            paused,
+            settings = new { settings.AutoCentre, settings.Wallpaper },
             animating = animation != null,
             camera = new { x = camera.Origin.X, y = camera.Origin.Y, scale = camera.Scale },
             screen = monitor.ToString(),
@@ -632,7 +807,9 @@ sealed class Canvas
     /// Puts every window back where it was before Expanse moved it, then quits.
     public void Quit()
     {
-        Originals.Restore(windows);
+        events.Dispose();
+        tray.Dispose();
+        if (!paused) Originals.Restore(windows);
         PostQuitMessage(0);
     }
 
