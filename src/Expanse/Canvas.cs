@@ -27,6 +27,10 @@ sealed class Canvas
     readonly List<Request> idleWaiters = new();
     Camera camera = Camera.Identity;
     Camera? returnCamera;
+    /// You moved the view at 100% yourself (dragged or scrolled it): the windows you can see are
+    /// where you want them. Clicking one that's partly on screen focuses it there, and diving into
+    /// one on screen keeps the view (the Mac's viewPlaced). Any glide or zoom clears it.
+    bool viewPlaced;
     RECT monitor, work;
     bool active;   // the overlay is up: zoomed out, or mid-glide
     bool gliding;  // up only to glide/dive into a window; input waits until it's handed back
@@ -216,6 +220,8 @@ sealed class Canvas
                         Log.Info($"window {w} {(zoomed ? "maximised" : "restored from maximised")}");
                     }
                     var size = new SizeD(f.Width, f.Height);
+                    // A VM or remote-screen window: the size its app gives it is the size chosen.
+                    if (w.SizesItself && !suspendTracking && size != w.Preferred) w.Preferred = size;
                     bool ours = w.LastSized is SizeD l && Math.Abs(l.W - size.W) < 2 && Math.Abs(l.H - size.H) < 2;
                     if (userSized.Contains(h) && !ours && !suspendTracking && size != w.Preferred)
                     {
@@ -533,7 +539,7 @@ sealed class Canvas
     /// app accepted; a hung app is left alone.
     SizeD ResizeReal(CanvasWindow w, SizeD size)
     {
-        if (IsHungAppWindow(w.Hwnd) || IsZoomed(w.Hwnd)) return w.Frame.Size;
+        if (IsHungAppWindow(w.Hwnd) || IsZoomed(w.Hwnd) || w.SizesItself) return w.Frame.Size;
         int width = (int)size.W + w.Insets.Left + w.Insets.Right, height = (int)size.H + w.Insets.Top + w.Insets.Bottom;
         SetWindowPos(w.Hwnd, 0, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
         var f = w.ReadScreenFrame();
@@ -802,6 +808,12 @@ sealed class Canvas
         var r = camera.ToView(focused.Frame);
         var screen = View.Inset(-1, -1);
         if (r.X >= screen.X && r.Y >= screen.Y && r.Right <= screen.Right && r.Bottom <= screen.Bottom) return;
+        if (viewPlaced && GoesOnScreen(r))
+        {
+            // Partly on screen, in a view you put there: it's the one you clicked, not one to go to.
+            Log.Info($"view placed by you: {focused} focused where it is");
+            return;
+        }
         Log.Info($"focus went to {focused}, not fully on screen: glide to {w}");
         Glide(w);
     }
@@ -1052,6 +1064,7 @@ sealed class Canvas
         CancelAnimation();
         camera.Pan(d);
         returnCamera = null;
+        viewPlaced = Math.Abs(camera.Scale - 1) < 0.001;
         if (drag == null) HoverAtCursor();
         Relayout();
     }
@@ -1061,6 +1074,7 @@ sealed class Canvas
         CancelAnimation();
         camera.Zoom(camera.Scale * factor, anchor);
         returnCamera = null;
+        viewPlaced = false;
         HoverAtCursor();
         Relayout();
     }
@@ -1081,6 +1095,7 @@ sealed class Canvas
         var target = camera;
         target.Zoom(scale, new Vec(ViewSize.X / 2, ViewSize.Y / 2));
         returnCamera = null;
+        viewPlaced = false;
         Animate(target, 0.22);
     }
 
@@ -1108,6 +1123,15 @@ sealed class Canvas
 
     double UiScale => GetDpiForWindow(overlay.Hwnd) / 96.0;
 
+    /// Enough of a window on screen to count as one you can see (the Mac's goesOnScreen): its top
+    /// not above the screen, and at least 48 px of it in each direction.
+    bool GoesOnScreen(RectD r)
+    {
+        var x0 = Math.Max(r.X, 0); var x1 = Math.Min(r.Right, ViewSize.X);
+        var y0 = Math.Max(r.Y, 0); var y1 = Math.Min(r.Bottom, ViewSize.Y);
+        return r.Y >= -1 && x1 - x0 >= 48 && y1 - y0 >= 48;
+    }
+
     /// A wheel turn zoomed out, as on the Mac: the wheel (and a touchpad's two-finger scroll) pans;
     /// with Ctrl (and a touchpad pinch, which arrives as Ctrl+wheel) it zooms around the pointer;
     /// Shift turns a plain wheel sideways. `at`: the pointer, in screen coordinates (packed).
@@ -1121,10 +1145,65 @@ sealed class Canvas
         else PanBy(new Vec(0, delta * step));
     }
 
+    // MARK: Dialogs over the canvas
+
+    /// While the canvas is up it never covers a dialog asking you something (as on the Mac): a
+    /// window on the canvas with a modal dialog up (the window itself disabled), or another app's
+    /// always-on-top dialog. The dialog is shown over the canvas, so you can answer it where you
+    /// are: made always-on-top for the while (the canvas is, and the newest goes in front), and put
+    /// back when it closes or the canvas goes. Checked twice a second (nothing says one opened).
+    void KeepDialogsVisible()
+    {
+        if (active) ShowDialogOverCanvas(AskingDialog());
+    }
+
+    void ShowDialogOverCanvas(nint dialog)
+    {
+        if (dialog == dialogOnTop) return;
+        const uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        if (dialogOnTop != 0 && IsWindow(dialogOnTop) && !dialogWasTopmost)
+            SetWindowPos(dialogOnTop, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        dialogOnTop = dialog;
+        if (dialog == 0) return;
+        dialogWasTopmost = (ExStyle(dialog) & WS_EX_TOPMOST) != 0;
+        // Off the screen (by its window, wherever that is), it comes to the middle of the screen;
+        // the hand-back puts it back by its window.
+        var f = Dwm.FrameBounds(dialog);
+        GetWindowRect(dialog, out var r);
+        bool onScreen = f.Left >= monitor.Left && f.Top >= monitor.Top && f.Right <= monitor.Right && f.Bottom <= monitor.Bottom;
+        int x = monitor.Left + (monitor.Width - f.Width) / 2 - (f.Left - r.Left), y = monitor.Top + (monitor.Height - f.Height) / 2 - (f.Top - r.Top);
+        SetWindowPos(dialog, HWND_TOPMOST, x, y, 0, 0, onScreen ? flags : SWP_NOSIZE | SWP_NOACTIVATE);
+        Log.Info($"dialog of {CanvasWindow.Describe(dialog)} shown over the canvas{(onScreen ? "" : ", brought onto the screen")}");
+    }
+
+    nint AskingDialog()
+    {
+        foreach (var w in windows)
+            if (!IsWindowEnabled(w.Hwnd))
+            {
+                nint popup = GetLastActivePopup(w.Hwnd);
+                if (popup != w.Hwnd && popup != 0 && IsWindowVisible(popup) && IsWindowEnabled(popup)) return popup;
+            }
+        nint found = 0;
+        uint self = Kernel32.GetCurrentProcessId();
+        EnumWindows((h, _) =>
+        {
+            if (!IsWindowVisible(h) || (ExStyle(h) & WS_EX_TOPMOST) == 0 || ClassName(h) != "#32770") return true;
+            GetWindowThreadProcessId(h, out uint pid);
+            var f = Dwm.FrameBounds(h);
+            if (pid == self || Dwm.IsCloaked(h) || f.Width < 100 || f.Height < 50) return true;
+            found = h;
+            return false;
+        }, 0);
+        return found;
+    }
+
     // MARK: Closing
 
     const int CloseMinWidth = 220; // no × on pictures narrower than this (as on the Mac)
-    const nint CloseTimer = 7, HotCornerTimer = 8;
+    const nint CloseTimer = 7, HotCornerTimer = 8, DialogTimer = 9;
+    nint dialogOnTop; // the dialog shown over the canvas, or 0 (see KeepDialogsVisible)
+    bool dialogWasTopmost;
     readonly HotCorner hotCorner = new();
 
     /// Whether `w` shows its × with the pointer over `pointer`: the window under the pointer
@@ -1286,6 +1365,7 @@ sealed class Canvas
         Relayout();
         pictures.Flush();
         overlay.Show(monitor, activate: zoomOut);
+        SetTimer(overlay.Hwnd, DialogTimer, 500, 0);
         Lift();
         if (zoomOut)
         {
@@ -1337,7 +1417,17 @@ sealed class Canvas
         {
             BringToFront(focus);
             FitToScreen(focus);
-            target = FocusCamera(focus);
+            if (viewPlaced && Math.Abs(camera.Scale - 1) < 0.001 && GoesOnScreen(camera.ToView(focus.Frame)))
+            {
+                // You put the view here: the window you picked is on screen, and the view stays.
+                Log.Info($"view placed by you: diving into {focus} where it is");
+                target = new Camera(new Vec(Math.Round(camera.Origin.X), Math.Round(camera.Origin.Y)), 1);
+            }
+            else
+            {
+                viewPlaced = false;
+                target = FocusCamera(focus);
+            }
         }
         else target = returnCamera ?? Camera.Centered(camera.Center(ViewSize), 1, ViewSize);
         gliding = true;
@@ -1352,6 +1442,7 @@ sealed class Canvas
     public void Glide(CanvasWindow w, bool sync = true)
     {
         if (gliding) return;
+        viewPlaced = false;
         if (active) { Exit(w); return; }
         Enter(zoomOut: false, sync);
         Exit(w, 0.3);
@@ -1378,6 +1469,8 @@ sealed class Canvas
             Log.Info($"focus {lastFocus}");
         }
         overlay.Hide();
+        KillTimer(overlay.Hwnd, DialogTimer);
+        ShowDialogOverCanvas(0);
         pictures.Detach();
         active = false;
         gliding = false;
@@ -1731,6 +1824,9 @@ sealed class Canvas
                     Log.Info($"hot corner ({settings.HotCorner})");
                     Toggle();
                 }
+                return 0;
+            case WM_TIMER when wParam == DialogTimer:
+                KeepDialogsVisible();
                 return 0;
             case WM_TIMER when wParam == CloseTimer:
                 KillTimer(overlay.Hwnd, CloseTimer);

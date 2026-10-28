@@ -77,6 +77,16 @@ sealed class CanvasWindow
         return wp;
     }
 
+    /// Apps whose window shows a display somewhere else (a VM, a remote PC): they size it to
+    /// match, and resizing it changes that display's resolution. Expanse leaves their size alone
+    /// and takes whatever size they choose (the Mac's sizesOwnWindows).
+    static readonly HashSet<string> sizesOwnWindows = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "mstsc", "msrdc", "Windows365", "vmconnect", "VirtualBoxVM", "vmware", "vmplayer", "parsecd", "Moonlight",
+        "vncviewer", "tvnviewer", "rustdesk", "AnyDesk", "TeamViewer", "qemu-system-x86_64", "qemu-system-aarch64",
+    };
+    public bool SizesItself => sizesOwnWindows.Contains(App);
+
     /// A dialog or other owned window (Find, Properties, "Save changes?") belongs to a canvas
     /// window, its Owner, and isn't on the canvas by itself. Windows doesn't move owned windows
     /// with their owner, so Expanse does: its frame is kept relative to the owner's, and goes
