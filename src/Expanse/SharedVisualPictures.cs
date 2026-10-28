@@ -135,6 +135,26 @@ sealed class SharedVisualPictures : IPictures
     public bool Add(CanvasWindow w)
     {
         if (pictures.ContainsKey(w.Hwnd)) return true;
+        if (Create(w) is not Picture p) return false;
+        canvas.AddVisual(p.Visual, false, null); // no reference visual, not "above": on top of its siblings
+        pictures[w.Hwnd] = p;
+        return true;
+    }
+
+    /// A new visual at the new size, put where the old one was in the stack.
+    public void Resized(CanvasWindow w)
+    {
+        if (!pictures.TryGetValue(w.Hwnd, out var old) || Create(w) is not Picture p) return;
+        canvas.AddVisual(p.Visual, true, old.Visual);
+        canvas.RemoveVisual(old.Visual);
+        Dwm.DwmUnregisterThumbnail(old.Thumb);
+        old.Visual.Dispose();
+        pictures[w.Hwnd] = p;
+    }
+
+    /// The window's picture: its visible frame, at its canvas spot.
+    Picture? Create(CanvasWindow w)
+    {
         var props = new DWM_THUMBNAIL_PROPERTIES
         {
             dwFlags = Dwm.DWM_TNP_RECTDESTINATION | Dwm.DWM_TNP_RECTSOURCE | Dwm.DWM_TNP_VISIBLE |
@@ -148,14 +168,12 @@ sealed class SharedVisualPictures : IPictures
         nint visual = 0, thumb = 0;
         if (failForTesting) hr = unchecked((int)0x80004005);
         else try { hr = DwmpCreateSharedThumbnailVisual(dest, w.Hwnd, 2, ref props, device.NativePointer, out visual, out thumb); }
-        catch (EntryPointNotFoundException) { Log.Info("pictures: this Windows has no DwmpCreateSharedThumbnailVisual"); return false; }
-        if (hr != 0 || visual == 0) { Log.Info($"pictures: shared visual for {w} failed 0x{hr:X8}"); return false; }
+        catch (EntryPointNotFoundException) { Log.Info("pictures: this Windows has no DwmpCreateSharedThumbnailVisual"); return null; }
+        if (hr != 0 || visual == 0) { Log.Info($"pictures: shared visual for {w} failed 0x{hr:X8}"); return null; }
         var v = new IDCompositionVisual2(visual);
         v.SetOffsetX((float)w.Frame.X);
         v.SetOffsetY((float)w.Frame.Y);
-        canvas.AddVisual(v, false, null); // no reference visual, not "above": on top of its siblings
-        pictures[w.Hwnd] = new Picture(v, thumb);
-        return true;
+        return new Picture(v, thumb);
     }
 
     public void Remove(CanvasWindow w)

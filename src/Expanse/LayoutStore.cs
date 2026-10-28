@@ -29,6 +29,11 @@ sealed class SavedWindow
     public double Y { get; set; }
     public double W { get; set; }
     public double H { get; set; }
+    /// Its spot in the home layout (full chosen sizes), and the size chosen.
+    public double? HX { get; set; }
+    public double? HY { get; set; }
+    public double? PW { get; set; }
+    public double? PH { get; set; }
     /// The window handle and its process: while the app keeps running (Expanse restarted, say),
     /// they identify the window exactly, even among windows with the same title.
     public long Hwnd { get; set; }
@@ -71,7 +76,63 @@ static class LayoutStore
     {
         App = w.AppPath, Class = w.Class, AppName = w.AppName, Title = TitleKey(w.Title),
         X = w.Frame.X, Y = w.Frame.Y, W = w.Frame.W, H = w.Frame.H, Hwnd = w.Hwnd, Pid = w.Pid,
+        HX = (w.Home ?? w.Frame.Origin).X, HY = (w.Home ?? w.Frame.Origin).Y,
+        PW = w.Preferred.W > 0 ? w.Preferred.W : null, PH = w.Preferred.W > 0 ? w.Preferred.H : null,
     };
+
+    // MARK: Snapshots
+
+    /// Earlier layouts to go back to (Restore Layout on the tray menu), newest first. One is taken
+    /// when the layout has changed and the newest is 15 minutes old, so they're minutes apart, not
+    /// one per window move; only the newest three stay. As on the Mac.
+    public sealed record Snapshot(DateTime Taken, string Path);
+    public const int SnapshotsKept = 3;
+    public static readonly TimeSpan SnapshotSpacing = TimeSpan.FromMinutes(15);
+
+    static string SnapshotFolder => System.IO.Path.Combine(Log.Folder, "Snapshots");
+
+    public static List<Snapshot> Snapshots()
+    {
+        if (!Directory.Exists(SnapshotFolder)) return new();
+        // Named for the time they were taken (seconds since 1970).
+        return Directory.GetFiles(SnapshotFolder, "*.json")
+            .Select(f => long.TryParse(System.IO.Path.GetFileNameWithoutExtension(f), out long t)
+                ? new Snapshot(DateTimeOffset.FromUnixTimeSeconds(t).LocalDateTime, f) : null)
+            .OfType<Snapshot>().OrderByDescending(s => s.Taken).ToList();
+    }
+
+    public static void SaveSnapshot(SavedLayout layout)
+    {
+        try
+        {
+            Directory.CreateDirectory(SnapshotFolder);
+            // Named for the second it's taken: two in the same second take the next free one.
+            long t = DateTimeOffset.Now.ToUnixTimeSeconds();
+            while (System.IO.File.Exists(System.IO.Path.Combine(SnapshotFolder, $"{t}.json"))) t++;
+            string file = System.IO.Path.Combine(SnapshotFolder, $"{t}.json");
+            System.IO.File.WriteAllText(file, JsonSerializer.Serialize(layout, json));
+            foreach (var old in Snapshots().Skip(SnapshotsKept)) System.IO.File.Delete(old.Path);
+        }
+        catch (IOException e) { Log.Info($"layout: couldn't save a snapshot: {e.Message}"); }
+    }
+
+    public static SavedLayout? Load(Snapshot snapshot)
+    {
+        try { return JsonSerializer.Deserialize<SavedLayout>(System.IO.File.ReadAllText(snapshot.Path), json); }
+        catch (Exception e) { Log.Info($"layout: couldn't read {snapshot.Path}: {e.Message}"); return null; }
+    }
+
+    /// "12 minutes ago (8:30 AM)".
+    public static string Describe(Snapshot s)
+    {
+        var ago = DateTime.Now - s.Taken;
+        static string N(int n, string unit) => $"{n} {unit}{(n == 1 ? "" : "s")} ago";
+        string rel = ago.TotalMinutes < 1 ? "Just now"
+            : ago.TotalHours < 1 ? N((int)ago.TotalMinutes, "minute")
+            : ago.TotalDays < 1 ? N((int)ago.TotalHours, "hour")
+            : N((int)ago.TotalDays, "day");
+        return $"{rel} ({(s.Taken.Date == DateTime.Today ? s.Taken.ToString("t") : s.Taken.ToString("g"))})";
+    }
 
     /// Whether that window still exists, in that process (handles get reused).
     static bool Exists(long hwnd, uint pid)

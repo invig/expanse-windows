@@ -23,6 +23,14 @@ sealed class CanvasWindow
     public POINT? Placed;
     /// Its window rect before Expanse first moved it, for putting it back on quit.
     public RECT? Original;
+    /// The size you chose (by dragging an edge); on a smaller screen the window is shrunk to fit
+    /// and grows back on a bigger one.
+    public SizeD Preferred;
+    /// Where it sits in the home layout: the arrangement at full chosen sizes (the big screen). On
+    /// a smaller screen the canvas is derived from it, so it comes back exactly.
+    public Vec? Home;
+    /// The size Expanse last gave it, so our resizes aren't taken for yours.
+    public SizeD? LastSized;
 
     public CanvasWindow(nint hwnd)
     {

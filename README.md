@@ -44,6 +44,20 @@ Early days. What works so far:
   later that had windows last time gets their spots back. Windows are matched by the same window
   while its app keeps running, then by app and title, then by app. Titles are stored only as
   hashes.
+- **At home on any screen size.** Each window keeps a home spot (its place in the full-size
+  layout) and the size you chose (by dragging an edge). When the screen changes (resolution,
+  scale, taskbar), the layout is fitted from home:
+  - sizes go back to what you chose, capped at the screen;
+  - positions are derived so every gap keeps its size, and only the overlaps the smaller screen
+    caused are pushed apart;
+  - the window you were in goes in the middle.
+
+  A smaller screen tightens the layout; going back puts it back exactly. Moves you make on the
+  smaller screen carry over. Tidy Up tidies the home layout and caps window sizes too.
+- **Restore Layout** (tray menu): a snapshot of the layout is taken when it has changed and the
+  last one is 15 minutes old; the newest three are kept. Picking one puts every window back where
+  it had them, fitted to this screen and shown zoomed out. The layout it replaces becomes a
+  snapshot, so you can go back.
 - **Pausing or quitting** puts every window back where it was before Expanse moved it, as does the
   next start after a crash (`Expanse.exe --restore` does it by hand).
 
@@ -105,6 +119,7 @@ scripts/vm.sh setup         # once: OpenSSH with this Mac's key, the .NET 10 SDK
 scripts/vm.sh build         # sync the source over and build everything
 scripts/vm.sh start         # (re)start Expanse on the VM's desktop
 scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, pause, resume, bench 5, quit
+scripts/vm.sh ctl screen 640 480   # pretend the screen is that size (no size: the real one)
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 scripts/vm.sh test          # the layout maths' tests
 ```

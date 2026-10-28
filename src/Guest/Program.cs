@@ -13,6 +13,7 @@ using static Expanse.Native.User32;
 //   rclick X Y       move there and right-click
 //   drag X1 Y1 X2 Y2 press at X1,Y1, move to X2,Y2 in steps, release
 //   down / up        press / release the left button where the pointer is
+//   res W H          change the screen's resolution
 //   ctrl+drag ...    the same drag with Ctrl held
 //   key COMBO        e.g. ctrl+alt+grave, esc, alt+tab (sent as scan codes)
 //   wait MS
@@ -60,6 +61,19 @@ try
                 Thread.Sleep(50);
                 Mouse(MOUSEEVENTF_LEFTUP);
                 Log($"drag {x1},{y1} -> {x2},{y2}");
+                break;
+            }
+            case "res":
+            {
+                int w = int.Parse(args[++i]), h = int.Parse(args[++i]);
+                var mode = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>(), dmDeviceName = "", dmFormName = "" };
+                EnumDisplaySettings(null, -1, ref mode); // ENUM_CURRENT_SETTINGS
+                mode.dmPelsWidth = w;
+                mode.dmPelsHeight = h;
+                mode.dmFields = 0x80000 | 0x100000; // DM_PELSWIDTH | DM_PELSHEIGHT
+                int result = ChangeDisplaySettingsEx(null, ref mode, 0, 0, 0);
+                Log($"res {w}x{h}: {result}");
+                if (result != 0) throw new InvalidOperationException($"ChangeDisplaySettingsEx returned {result}");
                 break;
             }
             case "down": Mouse(MOUSEEVENTF_LEFTDOWN); Log("down"); break;
@@ -154,8 +168,28 @@ static ushort ScanCode(string name) => name switch
     _ => throw new ArgumentException($"unknown key {name}"),
 };
 
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+static extern bool EnumDisplaySettings(string? device, int mode, ref DEVMODE devMode);
+
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+static extern int ChangeDisplaySettingsEx(string? device, ref DEVMODE devMode, nint hwnd, uint flags, nint param);
+
 static void Send(INPUT input)
 {
     if (SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>()) != 1)
         throw new InvalidOperationException($"SendInput failed ({Marshal.GetLastPInvokeError()})");
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+struct DEVMODE
+{
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    public int dmFields;
+    public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public short dmLogPixels;
+    public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+    public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
 }

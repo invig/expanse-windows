@@ -301,7 +301,7 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool UnhookWinEvent(nint hook);
 
     // Menus
-    public const uint MF_STRING = 0, MF_GRAYED = 1, MF_CHECKED = 8, MF_SEPARATOR = 0x800;
+    public const uint MF_STRING = 0, MF_GRAYED = 1, MF_CHECKED = 8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
     public const uint TPM_RIGHTBUTTON = 2, TPM_RETURNCMD = 0x100, TPM_NONOTIFY = 0x80;
     public const uint WM_NULL = 0, WM_CONTEXTMENU = 0x7B, WM_SETTINGCHANGE = 0x1A, WM_USER = 0x400;
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint CreatePopupMenu();

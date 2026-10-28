@@ -16,7 +16,8 @@ sealed class Tray : IDisposable
     public const uint WM_TRAY = WM_APP + 2;
     public readonly uint TaskbarCreated = RegisterWindowMessage("TaskbarCreated");
 
-    public sealed record Item(string Text, Action? Run, bool Checked = false, bool Enabled = true);
+    public sealed record Item(string Text, Action? Run, bool Checked = false, bool Enabled = true,
+        IReadOnlyList<Item?>? Children = null);
 
     readonly nint hwnd;
     nint icon;
@@ -67,23 +68,36 @@ sealed class Tray : IDisposable
         else if (ev == WM_CONTEXTMENU) ShowMenu((short)(wParam & 0xFFFF), (short)((wParam >> 16) & 0xFFFF), menu());
     }
 
-    /// `null` items are separators.
+    /// `null` items are separators; items with Children open a submenu.
     void ShowMenu(int x, int y, IReadOnlyList<Item?> items)
     {
-        nint menu = CreatePopupMenu();
-        for (int i = 0; i < items.Count; i++)
+        var commands = new List<Item>();
+        nint Build(IReadOnlyList<Item?> list)
         {
-            var item = items[i];
-            if (item == null) AppendMenu(menu, MF_SEPARATOR, 0, null);
-            else AppendMenu(menu, MF_STRING | (item.Checked ? MF_CHECKED : 0) | (item.Enabled ? 0 : MF_GRAYED), i + 1, item.Text);
+            nint menu = CreatePopupMenu();
+            foreach (var item in list)
+            {
+                if (item == null) { AppendMenu(menu, MF_SEPARATOR, 0, null); continue; }
+                uint state = (item.Checked ? MF_CHECKED : 0) | (item.Enabled ? 0 : MF_GRAYED);
+                if (item.Children != null)
+                {
+                    AppendMenu(menu, MF_POPUP | state, Build(item.Children), item.Text);
+                    continue;
+                }
+                commands.Add(item);
+                AppendMenu(menu, MF_STRING | state, commands.Count, item.Text);
+            }
+            return menu;
         }
+        nint root = Build(items);
         // The menu only closes on a click elsewhere if its window is in the foreground.
         SetForegroundWindow(hwnd);
-        uint picked = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, x, y, 0, hwnd, 0);
+        uint picked = TrackPopupMenu(root, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, x, y, 0, hwnd, 0);
         PostMessage(hwnd, WM_NULL, 0, 0);
-        DestroyMenu(menu);
-        if (picked > 0 && items[(int)picked - 1] is Item chosen)
+        DestroyMenu(root); // and its submenus
+        if (picked > 0 && picked <= commands.Count)
         {
+            var chosen = commands[(int)picked - 1];
             Log.Info($"tray menu: {chosen.Text}");
             chosen.Run?.Invoke();
         }

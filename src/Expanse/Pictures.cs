@@ -30,6 +30,10 @@ interface IPictures : IDisposable
     /// `w`'s canvas frame changed (dragged, tidied): its picture follows.
     void Moved(CanvasWindow w, Camera camera, RectD view);
 
+    /// The real window changed size (fitted to the screen): its picture takes the new size, in
+    /// the same place in the stack.
+    void Resized(CanvasWindow w);
+
     /// Snapping guides, in view coordinates, over the pictures. False if this kind can't draw
     /// over its pictures (the caller draws them underneath instead).
     bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness);
@@ -133,6 +137,12 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     public void SetLabels(IReadOnlyList<Label> labels, double scale) { }
     public void SetRing(RectD? picture, double scale) { }
     public void Present() { }
+
+    /// The next Moved sends it again, with the new source rect.
+    public void Resized(CanvasWindow w)
+    {
+        if (pictures.TryGetValue(w.Hwnd, out var p)) p.Dest = default;
+    }
 
     public void Moved(CanvasWindow w, Camera camera, RectD view)
     {
