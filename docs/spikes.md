@@ -256,3 +256,10 @@ backend, with 10 windows, in the same session:
    previews only show while the shell's own UI is up (Win opens Start and the taskbar over the
    canvas; Esc puts the canvas back on top and focused), as the Dock and Spotlight do over the
    Mac's canvas. Notifications show over it too, as on the Mac. Nothing to change.
+8. **The Mac's recent fixes, checked on Windows** (28 Oct): a window back from full screen (F11)
+   keeps its spot; a minimised window keeps its spot across an Expanse restart; the second
+   monitor switched off and back (Win+P "second screen only"; UTM's display counts as external
+   too, so the lid-close case, the main display going, can't be made in this VM): windows on it
+   are minimised by Windows (its "Minimize windows when a monitor is disconnected" setting) and
+   come back to their spots. One wrinkle: the Settings window maximised itself during the change
+   and the fit moved one parked window 32 px to make room, which stayed after the round trip.
