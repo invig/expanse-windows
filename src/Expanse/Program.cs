@@ -56,6 +56,12 @@ foreach (var (id, key, name) in new[] { (Canvas.HotkeyLeft, VK_LEFT, "Left"), (C
                                          (Canvas.HotkeyUp, VK_UP, "Up"), (Canvas.HotkeyDown, VK_DOWN, "Down") })
     if (!RegisterHotKey(overlay.Hwnd, id, MOD_CONTROL | MOD_ALT, (uint)key))
         Log.Info($"couldn't register Ctrl+Alt+{name}: something else has it");
+// Ctrl+Alt+C centres the window you're in (the Mac's ⌃⌥C); Ctrl+Alt+Shift+` turns auto-centring on
+// or off (⌥⇧`).
+if (!RegisterHotKey(overlay.Hwnd, Canvas.HotkeyCentre, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)VK_C))
+    Log.Info("couldn't register Ctrl+Alt+C: something else has it");
+if (!RegisterHotKey(overlay.Hwnd, Canvas.HotkeyAutoCentre, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk))
+    Log.Info("couldn't register Ctrl+Alt+Shift+`: something else has it");
 
 new CommandServer(overlay.Hwnd).Start();
 canvas.Start();

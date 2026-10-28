@@ -688,7 +688,8 @@ sealed class Canvas
     // MARK: Live tracking
 
     const nint SyncTimer = 1, FocusTimer = 2;
-    public const int HotkeyCanvas = 1, HotkeyLeft = 2, HotkeyRight = 3, HotkeyUp = 4, HotkeyDown = 5;
+    public const int HotkeyCanvas = 1, HotkeyLeft = 2, HotkeyRight = 3, HotkeyUp = 4, HotkeyDown = 5,
+        HotkeyCentre = 6, HotkeyAutoCentre = 7;
 
     /// A window event (see WinEvents). Nothing heavy happens here: comings and goings and moves
     /// are gathered into one sync 50 ms after the last of them, and focus acts where it settles
@@ -1185,7 +1186,8 @@ sealed class Canvas
         new("Open Expanse\tCtrl+Alt+`", () => Toggle(), Enabled: !paused),
         new(paused ? "Resume Expanse" : "Pause Expanse", () => { if (paused) Resume(); else Pause(); }),
         null,
-        new("Auto-Centre Focused Window", () => { settings.AutoCentre = !settings.AutoCentre; settings.Save(); }, settings.AutoCentre),
+        new("Centre Current Window\tCtrl+Alt+C", CentreCurrentWindow, Enabled: !paused),
+        new("Auto-Centre Focused Window\tCtrl+Alt+Shift+`", ToggleAutoCentre, settings.AutoCentre),
         new("Desktop Picture Background", () => { settings.Wallpaper = !settings.Wallpaper; settings.Save(); }, settings.Wallpaper),
         new("Show Window Names", () => { settings.ShowNames = !settings.ShowNames; settings.Save(); }, settings.ShowNames),
         new("Hot Corner", null, Children: HotCorner.Choices.Select(c => (Tray.Item?)new Tray.Item(c.title, () =>
@@ -1197,6 +1199,7 @@ sealed class Canvas
         new("Tidy Up Windows", Tidy, Enabled: !paused),
         new(Elevation.IsElevated ? "Include Admin Windows" : "Include Admin Windows…", ToggleAdminWindows, Elevation.IsElevated, Enabled: !paused),
         new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
+        new("Restore All Windows", RestoreAll, Enabled: !paused),
         null,
         new("Troubleshooting", null, Children: new Tray.Item?[]
         {
@@ -1341,6 +1344,7 @@ sealed class Canvas
         returnCamera = null;
         selected.Clear();
         spaceHeld = false;
+        if (pendingRestoreAll) { pendingRestoreAll = false; RestoreAll(); }
         Log.Info($"handed back: moved {moved} windows, waited {waited} frames, {Ms(t0):0}ms");
         if (pendingSync) { pendingSync = false; SyncLive(); }
         ScheduleSave();
@@ -1706,6 +1710,8 @@ sealed class Canvas
                     case HotkeyRight: Navigate(Direction.Right); break;
                     case HotkeyUp: Navigate(Direction.Up); break;
                     case HotkeyDown: Navigate(Direction.Down); break;
+                    case HotkeyCentre: CentreCurrentWindow(); break;
+                    case HotkeyAutoCentre: ToggleAutoCentre(); break;
                 }
                 return 0;
             case WM_MOUSEMOVE:
@@ -1956,6 +1962,8 @@ sealed class Canvas
         {
             case "state": request.Reply(State()); break;
             case "windows": request.Reply(CanvasWindow.Describe()); break;
+            case "centre": CentreCurrentWindow(); WhenIdle(request); break;
+            case "restoreall": RestoreAll(); request.Reply("done"); break;
             case "corner": // Hot Corner: off, all, topLeft, topRight, bottomLeft, bottomRight
                 if (HotCorner.Choices.Any(c => c.key == arg)) { settings.HotCorner = arg; settings.Save(); }
                 request.Reply($"hot corner {settings.HotCorner}");
@@ -2128,6 +2136,54 @@ sealed class Canvas
     }
 
     /// Puts every window back where it was before Expanse moved it, then quits.
+    // MARK: Centring, Restore All
+
+    /// Ctrl+Alt+C: the window you're in, to the middle of the screen at 100% (the Mac's ⌃⌥C).
+    public void CentreCurrentWindow()
+    {
+        if (paused || gliding) return;
+        var w = active ? (hovered ?? windows.LastOrDefault()) : CanvasWindowOf(GetForegroundWindow()) ?? CanvasWindowOf(lastFocusedWindow);
+        if (w == null) return;
+        Log.Info($"centre {w}");
+        if (active) Exit(w); else Glide(w);
+    }
+
+    /// Ctrl+Alt+Shift+`, or the tray: auto-centring on or off (off suits side-by-side work).
+    void ToggleAutoCentre()
+    {
+        settings.AutoCentre = !settings.AutoCentre;
+        settings.Save();
+        Log.Info($"auto-centre {(settings.AutoCentre ? "on" : "off")}");
+        tray.Notify(settings.AutoCentre ? "Auto-centre on" : "Auto-centre off",
+            settings.AutoCentre ? "A window you switch to glides into view." : "Switching windows leaves the view where it is.");
+    }
+
+    bool pendingRestoreAll;
+
+    /// The last resort (tray): every window off the screen comes into view, stacked down and to
+    /// the right from the top middle, and stays there on the canvas. As on the Mac.
+    public void RestoreAll()
+    {
+        if (paused || gliding) return;
+        if (active) { pendingRestoreAll = true; Exit(null); return; }
+        var view = new RectD(0, 0, ViewSize.X, ViewSize.Y);
+        int i = 0;
+        foreach (var w in windows)
+        {
+            var r = camera.ToView(w.Frame);
+            if (view.Inset(-1, -1).Contains(r)) continue;
+            var at = new Vec(view.W / 2 - r.W / 2 + i % 8 * 28, work.Top - monitor.Top + 40 + i % 8 * 28);
+            var before = w.Frame.Origin;
+            var c = camera.ToCanvas(at);
+            w.Frame = w.Frame with { X = Layout.Round(c.X), Y = Layout.Round(c.Y) };
+            NoteUserMove(w, before);
+            Place(w);
+            i++;
+        }
+        Log.Info($"restore all: {i} windows brought into view");
+        ScheduleSave();
+    }
+
     // MARK: Troubleshooting
 
     void ToggleDetailedLogging()
