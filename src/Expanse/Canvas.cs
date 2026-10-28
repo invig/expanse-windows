@@ -1201,6 +1201,7 @@ sealed class Canvas
         new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
         new("Restore All Windows", RestoreAll, Enabled: !paused),
         null,
+        new("Open at Login", () => LoginItem.Set(!LoginItem.IsOn), LoginItem.IsOn),
         new("Troubleshooting", null, Children: new Tray.Item?[]
         {
             new("Detailed Logging", ToggleDetailedLogging, settings.DetailedLogging),
@@ -1964,6 +1965,10 @@ sealed class Canvas
             case "windows": request.Reply(CanvasWindow.Describe()); break;
             case "centre": CentreCurrentWindow(); WhenIdle(request); break;
             case "restoreall": RestoreAll(); request.Reply("done"); break;
+            case "login": // Open at Login on or off
+                if (arg is "on" or "off") LoginItem.Set(arg == "on");
+                request.Reply($"open at login {(LoginItem.IsOn ? "on" : "off")}");
+                break;
             case "corner": // Hot Corner: off, all, topLeft, topRight, bottomLeft, bottomRight
                 if (HotCorner.Choices.Any(c => c.key == arg)) { settings.HotCorner = arg; settings.Save(); }
                 request.Reply($"hot corner {settings.HotCorner}");
