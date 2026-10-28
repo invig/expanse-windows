@@ -117,7 +117,8 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
   it's missing or fails, Expanse falls back to documented DWM thumbnails, one call per picture per
   frame. `Expanse.exe --pictures dwm` forces the fallback.
 - **Our UI is in the same tree, over the pictures:** titles (Direct2D/DirectWrite, drawn once per
-  text), the hover and selection rings, the marquee, close buttons and snapping guides. Everything
+  text), the hover and selection rings and close buttons (each in its picture's place in the
+  stack, so a window in front covers them), the marquee and snapping guides. Everything
   that moves with the camera changes in one composition commit per frame. With the fallback, DWM
   draws its thumbnails over everything, so titles and rings go on the backdrop underneath, and
   there are no close buttons (<kbd>Ctrl</kbd> <kbd>W</kbd> still works).

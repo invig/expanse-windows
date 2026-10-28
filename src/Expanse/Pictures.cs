@@ -61,9 +61,10 @@ interface IPictures : IDisposable
 
 readonly record struct Label(nint Hwnd, string Text, RectD Picture);
 
-/// View coordinates. `Closes`: the pictures showing a close button (see Marks.CloseRect).
-readonly record struct Marks(IReadOnlyList<(RectD picture, bool selected)> Rings, RectD? SelectionBox, RectD? Marquee,
-    IReadOnlyList<RectD> Closes)
+/// View coordinates. Rings and close buttons belong to a window (its handle), and stack with its
+/// picture. `Closes`: the pictures showing a close button (see Marks.CloseRect).
+readonly record struct Marks(IReadOnlyList<(nint hwnd, RectD picture, bool selected)> Rings, RectD? SelectionBox, RectD? Marquee,
+    IReadOnlyList<(nint hwnd, RectD picture)> Closes)
 {
     public static readonly Marks None = new([], null, null, []);
 

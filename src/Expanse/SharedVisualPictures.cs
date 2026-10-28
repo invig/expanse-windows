@@ -42,6 +42,16 @@ sealed class SharedVisualPictures : IPictures
         public readonly nint Thumb = thumb;
     }
 
+    /// A picture's own ring and close button, in the canvas right above it: a window in front
+    /// covers them as it covers the picture. Canvas coordinates (see SetMarks).
+    sealed class MarkLayer(IDCompositionVisual2 container, IDCompositionVisual2[] ring, IDCompositionVisual2 close)
+    {
+        public readonly IDCompositionVisual2 Container = container;
+        public readonly IDCompositionVisual2[] Ring = ring;
+        public readonly IDCompositionVisual2 Close = close;
+        public bool Showing;
+    }
+
     /// A window's title: a visual with a surface drawn once per text and DPI scale.
     sealed class Title(IDCompositionVisual2 visual)
     {
@@ -56,9 +66,9 @@ sealed class SharedVisualPictures : IPictures
     readonly ID3D11Device d3d;
     readonly IDCompositionDesktopDevice device;
     readonly IDCompositionTarget target;
-    readonly IDCompositionVisual2 root, canvas, titles, closes;
+    readonly IDCompositionVisual2 root, canvas, titles;
     readonly Strips accent, marqueeFill, guides;
-    readonly List<IDCompositionVisual2> closeVisuals = new();
+    readonly Dictionary<nint, MarkLayer> markLayers = new();
     IDCompositionSurface? closeSurface;
     double closeScale;
     readonly ID2D1Factory1 d2dFactory;
@@ -93,7 +103,8 @@ sealed class SharedVisualPictures : IPictures
         dwrite = DWrite.DWriteCreateFactory<IDWriteFactory>(Vortice.DirectWrite.FactoryType.Shared);
 
         // Topmost: the tree draws over the overlay's own (GDI) backdrop. Bottom to top: the
-        // pictures, the hover ring, titles, snapping guides.
+        // pictures (each with its ring and close button), the selection box and marquee, titles,
+        // snapping guides.
         device.CreateTargetForHwnd(dest, true, out target);
         device.CreateVisual(out root);
         target.SetRoot(root);
@@ -104,8 +115,6 @@ sealed class SharedVisualPictures : IPictures
         marqueeFill = new Strips(this, 76 / 255f, 154 / 255f, 1f, 0.12f);
         device.CreateVisual(out titles);
         root.AddVisual(titles, false, null);
-        device.CreateVisual(out closes);
-        root.AddVisual(closes, false, null);
         guides = new Strips(this, 1f, 0.22f, 0.37f);
         device.Commit();
         Log.Info($"pictures: shared visuals (D3D11 {driver})");
@@ -144,10 +153,35 @@ sealed class SharedVisualPictures : IPictures
         if (Create(w) is not Picture p) return false;
         canvas.AddVisual(p.Visual, false, null); // no reference visual, not "above": on top of its siblings
         pictures[w.Hwnd] = p;
+        var layer = NewMarkLayer();
+        canvas.AddVisual(layer.Container, true, p.Visual);
+        markLayers[w.Hwnd] = layer;
         return true;
     }
 
-    /// A new visual at the new size, put where the old one was in the stack.
+    MarkLayer NewMarkLayer()
+    {
+        device.CreateVisual(out var container);
+        var ring = new IDCompositionVisual2[4];
+        for (int i = 0; i < 4; i++)
+        {
+            device.CreateVisual(out ring[i]);
+            ring[i].SetContent(accent.Colour);
+            ring[i].SetBorderMode(BorderMode.Hard);
+        }
+        device.CreateVisual(out var close);
+        return new MarkLayer(container, ring, close);
+    }
+
+    static void Dispose(MarkLayer layer)
+    {
+        layer.Container.RemoveAllVisuals();
+        foreach (var v in layer.Ring) v.Dispose();
+        layer.Close.Dispose();
+        layer.Container.Dispose();
+    }
+
+    /// A new visual at the new size, put where the old one was in the stack (under its marks).
     public void Resized(CanvasWindow w)
     {
         if (!pictures.TryGetValue(w.Hwnd, out var old) || Create(w) is not Picture p) return;
@@ -185,6 +219,11 @@ sealed class SharedVisualPictures : IPictures
     public void Remove(CanvasWindow w)
     {
         if (titleVisuals.Remove(w.Hwnd, out var t)) Dispose(t);
+        if (markLayers.Remove(w.Hwnd, out var layer))
+        {
+            canvas.RemoveVisual(layer.Container);
+            Dispose(layer);
+        }
         if (!pictures.Remove(w.Hwnd, out var p)) return;
         canvas.RemoveVisual(p.Visual);
         device.Commit();
@@ -197,6 +236,11 @@ sealed class SharedVisualPictures : IPictures
         if (!pictures.TryGetValue(w.Hwnd, out var p)) return;
         canvas.RemoveVisual(p.Visual);
         canvas.AddVisual(p.Visual, false, null);
+        if (markLayers.TryGetValue(w.Hwnd, out var layer))
+        {
+            canvas.RemoveVisual(layer.Container);
+            canvas.AddVisual(layer.Container, true, p.Visual);
+        }
         device.Commit();
     }
 
@@ -204,7 +248,6 @@ sealed class SharedVisualPictures : IPictures
     {
         canvas.RemoveAllVisuals();
         titles.RemoveAllVisuals();
-        closes.RemoveAllVisuals();
         accent.Set([]);
         marqueeFill.Set([]);
         guides.Set([]);
@@ -215,6 +258,8 @@ sealed class SharedVisualPictures : IPictures
             p.Visual.Dispose();
         }
         pictures.Clear();
+        foreach (var layer in markLayers.Values) Dispose(layer);
+        markLayers.Clear();
         // Titles are kept: their surfaces are drawn again only when the text changes.
     }
 
@@ -264,30 +309,45 @@ sealed class SharedVisualPictures : IPictures
     {
         var rects = new List<RectD>();
         double gap = Math.Max(1, Math.Round(2 * scale)), thin = Math.Max(1, Math.Round(scale));
-        foreach (var (r, selected) in marks.Rings)
-        {
-            double t = Math.Max(2, Math.Round((selected ? 4 : 3) * scale));
-            Outline(rects, r.Inset(-(gap + t), -(gap + t)), t);
-        }
         if (marks.SelectionBox is RectD box) Outline(rects, box.Inset(-8 * scale, -8 * scale), thin);
         if (marks.Marquee is RectD m) Outline(rects, m, thin);
         accent.Set(rects);
         marqueeFill.Set(marks.Marquee is RectD fill ? [fill] : []);
 
+        // Each window's ring and close button go in its mark layer, in canvas coordinates: worked
+        // out in view pixels (so thicknesses stay whole pixels), then taken back through the camera.
         if (marks.Closes.Count > 0 && (closeSurface == null || closeScale != scale)) DrawClose(scale);
-        closes.RemoveAllVisuals();
-        for (int i = 0; i < marks.Closes.Count; i++)
+        var (ox, oy, s) = lastCamera ?? (0, 0, 1);
+        RectD ToCanvas(RectD v) => new(v.X / s + ox, v.Y / s + oy, v.W / s, v.H / s);
+        var rings = marks.Rings.ToDictionary(r => r.hwnd);
+        var closes = marks.Closes.ToDictionary(c => c.hwnd);
+        foreach (var (hwnd, layer) in markLayers)
         {
-            if (i == closeVisuals.Count)
+            bool ring = rings.TryGetValue(hwnd, out var r), close = closes.TryGetValue(hwnd, out var c);
+            if (!ring && !close && !layer.Showing) continue;
+            layer.Container.RemoveAllVisuals();
+            layer.Showing = ring || close;
+            if (ring)
             {
-                device.CreateVisual(out var v);
-                closeVisuals.Add(v);
+                var strips = new List<RectD>(4);
+                double t = Math.Max(2, Math.Round((r.selected ? 4 : 3) * scale));
+                Outline(strips, r.picture.Inset(-(gap + t), -(gap + t)), t);
+                for (int i = 0; i < 4; i++)
+                {
+                    var cr = ToCanvas(strips[i]);
+                    layer.Ring[i].SetTransform(new Matrix3x2((float)cr.W, 0, 0, (float)cr.H, (float)cr.X, (float)cr.Y));
+                    layer.Container.AddVisual(layer.Ring[i], false, null);
+                }
             }
-            var c = Marks.CloseRect(marks.Closes[i], scale);
-            closeVisuals[i].SetContent(closeSurface);
-            closeVisuals[i].SetOffsetX((float)Math.Round(c.X));
-            closeVisuals[i].SetOffsetY((float)Math.Round(c.Y));
-            closes.AddVisual(closeVisuals[i], false, null);
+            if (close)
+            {
+                // Drawn at the screen's pixel size: scaled by the inverse of the camera's zoom.
+                var cv = Marks.CloseRect(c.picture, scale);
+                layer.Close.SetContent(closeSurface);
+                layer.Close.SetTransform(new Matrix3x2((float)(1 / s), 0, 0, (float)(1 / s),
+                    (float)(Math.Round(cv.X) / s + ox), (float)(Math.Round(cv.Y) / s + oy)));
+                layer.Container.AddVisual(layer.Close, false, null);
+            }
         }
     }
 
@@ -412,6 +472,7 @@ sealed class SharedVisualPictures : IPictures
         readonly SharedVisualPictures owner;
         readonly IDCompositionVisual2 container;
         readonly IDCompositionSurface colour;
+        public IDCompositionSurface Colour => colour;
         readonly List<IDCompositionVisual2> pool = new();
 
         public Strips(SharedVisualPictures owner, float r, float g, float b, float a = 1f)
@@ -463,9 +524,7 @@ sealed class SharedVisualPictures : IPictures
         accent.Dispose();
         marqueeFill.Dispose();
         guides.Dispose();
-        foreach (var v in closeVisuals) v.Dispose();
         closeSurface?.Dispose();
-        closes.Dispose();
         foreach (var f in fonts.Values) f.Dispose();
         titles.Dispose();
         canvas.Dispose();

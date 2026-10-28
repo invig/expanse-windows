@@ -136,9 +136,8 @@ backend, with 10 windows, in the same session:
    Tidy Up, new windows in free space~~: done. Still to come:
    - ~~The rest of the zoomed-out controls: box-select, Shift-click and group drag, the close
      button, zoom keys, wheel and Space-drag pan~~: done.
-   - **Rings and close buttons are drawn over every picture**, not in each one's stacking order:
-     a ring round a window that's behind another crosses the one in front. (A × is only shown
-     where nothing in front covers it.)
+   - ~~Rings and close buttons drawn over every picture~~: each picture now has its own layer
+     for them, right above it in the canvas, so a window in front covers them.
    - **The VM's display resets to the UTM window's size** (800×600 lately) every so often, even
      after `Guest res`; tests that click at fixed spots should set it right before.
    - ~~The saved layout, the home layout for smaller screens, Restore Layout~~: done.
@@ -206,5 +205,4 @@ backend, with 10 windows, in the same session:
    - **Known gap:** a window straddling the main screen's edge shows on the neighbouring monitor,
      and if most of it is there and that monitor's scaling differs, Windows rescales it.
 
-6. Next: the rings in stacking order, taskbar previews over the overlay, the minimised-window
-   size bug above.
+6. Next: taskbar previews over the overlay, the minimised-window size bug above.

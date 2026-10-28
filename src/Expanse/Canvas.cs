@@ -1794,10 +1794,10 @@ sealed class Canvas
     Marks CurrentMarks(double k)
     {
         var rings = windows.Where(w => w == hovered || selected.Contains(w))
-            .Select(w => (camera.ToView(w.Frame), selected.Contains(w))).ToList();
+            .Select(w => (w.Hwnd, camera.ToView(w.Frame), selected.Contains(w))).ToList();
         var picked = windows.Where(selected.Contains).Select(w => camera.ToView(w.Frame)).ToList();
         RectD? box = picked.Count > 1 ? picked.Skip(1).Aggregate(picked[0], (a, b) => a.Union(b)) : null;
-        var closes = drag == null ? windows.Where(w => CloseShown(w, hovered, k)).Select(w => camera.ToView(w.Frame)).ToList() : [];
+        var closes = drag == null ? windows.Where(w => CloseShown(w, hovered, k)).Select(w => (w.Hwnd, camera.ToView(w.Frame))).ToList() : [];
         return new Marks(rings, box, marquee, closes);
     }
 
@@ -1864,7 +1864,7 @@ sealed class Canvas
             }
         }
         int gap = Math.Max(1, (int)Math.Round(2 * k)), thin = Math.Max(1, (int)Math.Round(k));
-        foreach (var (r, isSelected) in marks.Rings)
+        foreach (var (_, r, isSelected) in marks.Rings)
         {
             int t = Math.Max(2, (int)Math.Round((isSelected ? 4 : 3) * k));
             Outline(r.Inset(-(gap + t), -(gap + t)), t);
