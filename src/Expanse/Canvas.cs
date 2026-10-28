@@ -90,6 +90,8 @@ sealed class Canvas
 
     enum DragKind { Windows, Marquee, Pan, Minimap }
     readonly Minimap minimap = new();
+    readonly DesktopsPanel desktopsPanel = new();
+    int hoveredDesktop = -1;
 
     /// A press on the zoomed-out canvas: on a window (it moves, with the rest of the selection if
     /// it's in one), on empty canvas (a marquee), or with Space held (the canvas pans).
@@ -940,6 +942,17 @@ sealed class Canvas
     /// the selection with Shift.
     void Press(Vec p, bool shift)
     {
+        if (desktopsPanel.Panel.Contains(p))
+        {
+            // The Desktops panel: a tile goes to that desktop (its windows come onto the canvas).
+            int i = desktopsPanel.TileAt(p);
+            if (i >= 0 && desktopsPanel.Current >= 0 && i != desktopsPanel.Current)
+            {
+                Log.Info($"desktop {desktopsPanel.Current + 1} -> {i + 1}");
+                VirtualDesktops.Move(i - desktopsPanel.Current);
+            }
+            return;
+        }
         if (minimap.Panel.Contains(p))
         {
             // The minimap: the view goes where you click, and follows as you drag.
@@ -1827,6 +1840,7 @@ sealed class Canvas
                 return 0;
             case WM_TIMER when wParam == DialogTimer:
                 KeepDialogsVisible();
+                if (active && !gliding && animation == null) Redraw(); // the Desktops panel follows desktop changes
                 return 0;
             case WM_TIMER when wParam == CloseTimer:
                 KillTimer(overlay.Hwnd, CloseTimer);
@@ -1973,7 +1987,9 @@ sealed class Canvas
     void Hover(Vec p)
     {
         if (!active || gliding || animation != null) return;
-        var w = minimap.Panel.Contains(p) ? null : WindowAt(p);
+        int desk = desktopsPanel.Panel.Contains(p) ? desktopsPanel.TileAt(p) : -1;
+        if (desk != hoveredDesktop) { hoveredDesktop = desk; Redraw(); }
+        var w = minimap.Panel.Contains(p) || desktopsPanel.Panel.Contains(p) ? null : WindowAt(p);
         if (w == hovered) return;
         hovered = w;
         Redraw();
@@ -2001,7 +2017,10 @@ sealed class Canvas
         double k = UiScale;
         pictures.SetLabels(show && settings.ShowNames ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
         pictures.SetMarks(show ? CurrentMarks(k) : Marks.None, k);
-        pictures.SetMinimap(show ? MinimapNow(k) : null, k);
+        var map = show ? MinimapNow(k) : (MinimapDrawing?)null;
+        pictures.SetMinimap(map, k);
+        if (show) desktopsPanel.Refresh();
+        pictures.SetDesktops(map is MinimapDrawing m ? desktopsPanel.Update(m.Panel, hoveredDesktop, k, m.Dark) : null, k);
         pictures.Present();
     }
 

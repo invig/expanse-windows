@@ -75,6 +75,12 @@ sealed class SharedVisualPictures : IPictures
     IDCompositionSurface? minimapSurface;
     (int w, int h) minimapSize;
     MinimapDrawing? minimapDrawn;
+    readonly IDCompositionVisual2 desktopsVisual;
+    IDCompositionSurface? desktopsSurface;
+    (int w, int h) desktopsSize;
+    DesktopsDrawing? desktopsDrawn;
+    byte[]? tileThumb;
+    (int w, int h) tileThumbSize;
     readonly ID2D1Factory1 d2dFactory;
     readonly ID2D1Device d2dDevice;
     readonly ID2D1DeviceContext d2d;
@@ -122,6 +128,8 @@ sealed class SharedVisualPictures : IPictures
         guides = new Strips(this, 1f, 0.22f, 0.37f);
         device.CreateVisual(out minimapVisual);
         root.AddVisual(minimapVisual, false, null);
+        device.CreateVisual(out desktopsVisual);
+        root.AddVisual(desktopsVisual, false, null);
         device.Commit();
         Log.Info($"pictures: shared visuals (D3D11 {driver})");
     }
@@ -445,6 +453,107 @@ sealed class SharedVisualPictures : IPictures
         return true;
     }
 
+    /// The Desktops panel (see DesktopsPanel), drawn like the minimap: a surface of its own,
+    /// redrawn only when it changes. Each tile shows the desktop picture.
+    public bool SetDesktops(DesktopsDrawing? desktops, double scale)
+    {
+        if (desktops is not DesktopsDrawing d)
+        {
+            if (desktopsDrawn != null) { desktopsVisual.SetContent(null); desktopsDrawn = null; }
+            return true;
+        }
+        if (desktopsDrawn is DesktopsDrawing last && last.Same(d)) return true;
+        int w = (int)Math.Ceiling(d.Panel.W), h = (int)Math.Ceiling(d.Panel.H);
+        if (desktopsSurface == null || desktopsSize != (w, h))
+        {
+            desktopsSurface?.Dispose();
+            device.CreateSurface((uint)w, (uint)h, Format.B8G8R8A8_UNorm, AlphaMode.Premultiplied, out var created);
+            desktopsSurface = created;
+            desktopsSize = (w, h);
+        }
+        float k = (float)scale;
+        int tw = d.Tiles.Count > 0 ? (int)Math.Round(d.Tiles[0].W) : 1, th = d.Tiles.Count > 0 ? (int)Math.Round(d.Tiles[0].H) : 1;
+        if (tileThumb == null || tileThumbSize != (tw, th))
+        {
+            tileThumb = Wallpaper.Thumbnail(tw, th);
+            tileThumbSize = (tw, th);
+        }
+        System.Drawing.RectangleF Local(RectD r) => new((float)(r.X - d.Panel.X), (float)(r.Y - d.Panel.Y), (float)r.W, (float)r.H);
+        var accent = new Color4(76 / 255f, 154 / 255f, 1f, 1f);
+        using (var dxgi = desktopsSurface.BeginDraw<IDXGISurface>(null, out Vortice.Mathematics.Int2 offset))
+        using (var bitmap = d2d.CreateBitmapFromDxgiSurface(dxgi, new BitmapProperties1(
+                   new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied), 96, 96,
+                   BitmapOptions.Target | BitmapOptions.CannotDraw)))
+        using (var panel = d2d.CreateSolidColorBrush(d.Dark ? new Color4(0.12f, 0.12f, 0.13f, 0.9f) : new Color4(0.97f, 0.97f, 0.98f, 0.9f)))
+        using (var edge = d2d.CreateSolidColorBrush(d.Dark ? new Color4(1f, 1f, 1f, 0.12f) : new Color4(0f, 0f, 0f, 0.1f)))
+        using (var well = d2d.CreateSolidColorBrush(d.Dark ? new Color4(1f, 1f, 1f, 0.1f) : new Color4(0f, 0f, 0f, 0.1f)))
+        using (var quiet = d2d.CreateSolidColorBrush(d.Dark ? new Color4(1f, 1f, 1f, 0.3f) : new Color4(0f, 0f, 0f, 0.3f)))
+        using (var ring = d2d.CreateSolidColorBrush(accent))
+        using (var ink = d2d.CreateSolidColorBrush(d.Dark ? new Color4(1f, 1f, 1f, 1f) : new Color4(0f, 0f, 0f, 0.85f)))
+        using (var headFont = dwrite.CreateTextFormat("Segoe UI", FontWeight.SemiBold, Vortice.DirectWrite.FontStyle.Normal, 11 * k))
+        using (var nameFont = dwrite.CreateTextFormat("Segoe UI", FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, 11 * k))
+        using (var boldFont = dwrite.CreateTextFormat("Segoe UI", FontWeight.SemiBold, Vortice.DirectWrite.FontStyle.Normal, 11 * k))
+        {
+            nameFont.TextAlignment = TextAlignment.Center;
+            boldFont.TextAlignment = TextAlignment.Center;
+            d2d.Target = bitmap;
+            d2d.BeginDraw();
+            d2d.Transform = Matrix3x2.CreateTranslation(offset.X, offset.Y);
+            d2d.PushAxisAlignedClip(new Vortice.RawRectF(0, 0, w, h), AntialiasMode.Aliased);
+            d2d.Clear(new Color4(0, 0, 0, 0));
+            float corner = 12 * k;
+            var panelRect = new System.Drawing.RectangleF(0.5f, 0.5f, (float)d.Panel.W - 1, (float)d.Panel.H - 1);
+            d2d.FillRoundedRectangle(new RoundedRectangle(panelRect, corner, corner), panel);
+            d2d.DrawRoundedRectangle(new RoundedRectangle(panelRect, corner, corner), edge, 1);
+            d2d.DrawText("Desktops", headFont, new Vortice.RawRectF(14 * k, 9 * k, 200 * k, 25 * k), ink);
+            ID2D1Bitmap? picture = null;
+            if (tileThumb != null)
+            {
+                var handle = System.Runtime.InteropServices.GCHandle.Alloc(tileThumb, System.Runtime.InteropServices.GCHandleType.Pinned);
+                try
+                {
+                    picture = d2d.CreateBitmap(new Vortice.Mathematics.SizeI(tw, th), handle.AddrOfPinnedObject(), (uint)(tw * 4),
+                        new BitmapProperties(new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied)));
+                }
+                finally { handle.Free(); }
+            }
+            float tileCorner = Math.Max(2, corner - 14 * k + 6 * k);
+            for (int i = 0; i < d.Tiles.Count; i++)
+            {
+                var t = Local(d.Tiles[i]);
+                var rounded = new RoundedRectangle(t, tileCorner, tileCorner);
+                if (picture != null)
+                {
+                    using var geometry = d2dFactory.CreateRoundedRectangleGeometry(rounded);
+                    d2d.PushLayer(new LayerParameters { ContentBounds = new Vortice.RawRectF(t.Left, t.Top, t.Right, t.Bottom),
+                        GeometricMask = geometry, Opacity = 1, MaskTransform = Matrix3x2.Identity }, null);
+                    d2d.DrawBitmap(picture, new Vortice.RawRectF(t.Left, t.Top, t.Right, t.Bottom), 1, Vortice.Direct2D1.BitmapInterpolationMode.Linear, null);
+                    d2d.PopLayer();
+                }
+                else d2d.FillRoundedRectangle(rounded, well);
+                bool current = i == d.Current;
+                if (current || i == d.Hovered)
+                {
+                    float o = (float)(DesktopsPanel.Outset * k);
+                    var r = new RoundedRectangle(new System.Drawing.RectangleF(t.X - o, t.Y - o, t.Width + 2 * o, t.Height + 2 * o), tileCorner + o, tileCorner + o);
+                    d2d.DrawRoundedRectangle(r, current ? ring : quiet, (current ? 2.5f : 1.5f) * k);
+                }
+                d2d.DrawText(d.Names[i], current ? boldFont : nameFont,
+                    new Vortice.RawRectF(t.Left - 2 * k, t.Bottom + 7 * k, t.Right + 2 * k, t.Bottom + 23 * k), ink);
+            }
+            picture?.Dispose();
+            d2d.PopAxisAlignedClip();
+            d2d.EndDraw();
+            d2d.Target = null;
+        }
+        desktopsSurface.EndDraw();
+        desktopsVisual.SetContent(desktopsSurface);
+        desktopsVisual.SetOffsetX((float)Math.Round(d.Panel.X));
+        desktopsVisual.SetOffsetY((float)Math.Round(d.Panel.Y));
+        desktopsDrawn = d;
+        return true;
+    }
+
     /// The close button: a dark, three-quarters opaque circle with a white ×, as on the Mac.
     void DrawClose(double scale)
     {
@@ -612,6 +721,8 @@ sealed class SharedVisualPictures : IPictures
         closeSurface?.Dispose();
         minimapSurface?.Dispose();
         minimapVisual.Dispose();
+        desktopsSurface?.Dispose();
+        desktopsVisual.Dispose();
         foreach (var f in fonts.Values) f.Dispose();
         titles.Dispose();
         canvas.Dispose();

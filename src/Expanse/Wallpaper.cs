@@ -29,6 +29,33 @@ sealed class Wallpaper : IDisposable
         }
     }
 
+    /// The desktop picture at `w` x `h` (filled, as Settings' "Fill"), as premultiplied BGRA rows:
+    /// for the Desktops panel's tiles. Null without one.
+    public static byte[]? Thumbnail(int w, int h)
+    {
+        if (CurrentPath() is not string file || !File.Exists(file)) return null;
+        try
+        {
+            using var image = Image.FromFile(file);
+            using var canvas = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var g = Graphics.FromImage(canvas))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                double s = Math.Max((double)w / image.Width, (double)h / image.Height);
+                int dw = (int)Math.Ceiling(image.Width * s), dh = (int)Math.Ceiling(image.Height * s);
+                g.DrawImage(image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+            }
+            var data = canvas.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            var bytes = new byte[w * h * 4];
+            for (int y = 0; y < h; y++)
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0 + y * data.Stride, bytes, y * w * 4, w * 4);
+            canvas.UnlockBits(data);
+            return bytes;
+        }
+        catch (Exception e) { Log.Info($"wallpaper: no thumbnail ({e.Message})"); return null; }
+    }
+
     static string? CurrentPath()
     {
         var sb = new StringBuilder(1024);

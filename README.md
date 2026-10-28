@@ -6,8 +6,8 @@ one to glide straight to it.
 
 <p align="center"><img src="docs/images/milestone-zoomed-out.jpg" alt="Zoomed out: every window live on the canvas" width="720"></p>
 
-It does what the Mac app does, bar update checks and the Spaces panel (see
-[docs/spikes.md](docs/spikes.md) for what's left and why):
+It does what the Mac app does, bar update checks (see [docs/spikes.md](docs/spikes.md) for what's
+left and why):
 
 - **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
   layout), by resting the pointer in the top-left corner of the screen (the **Hot Corner**, tray
@@ -15,7 +15,9 @@ It does what the Mac app does, bar update checks and the Spaces panel (see
   Names** (tray) puts each app's name above its picture (the window's title too when the pointer is
   on it); off by default, as on the Mac, since titles can be private.
 - **The minimap** (bottom right, zoomed out) shows every window and where you are; click or drag in
-  it to move there.
+  it to move there. With more than one virtual desktop, the **Desktops** panel beside it (the Mac's
+  Spaces panel) has a tile for each; click one to go there. Each desktop's windows are on the
+  canvas while it's the current one, and come back to their spots.
 - **Click a window** to glide to it at 100%, centred in the work area and focused. The other windows
   move with the canvas, off-screen if that's where the camera puts them.
 - <kbd>Ctrl</kbd> <kbd>Alt</kbd> + arrow keys **hop to the nearest window in that direction**,

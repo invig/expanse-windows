@@ -239,8 +239,11 @@ backend, with 10 windows, in the same session:
      always-on-top for the while (and brought onto the screen if its window put it off it).
    - **Not done, needs Matthew:** update checks (there's no release channel or repo for the
      Windows build yet) and Report an Issue (no repo to point at).
-   - **Not done yet:** the Spaces panel. Windows' virtual desktops are the nearest thing; reading
-     them is easy (the registry), switching has no public API (Win+Ctrl+arrows would do).
+   - **The Spaces panel is the Desktops panel**, for Windows' virtual desktops: the list, names
+     and current one read from Explorer's registry key (polled twice a second while zoomed out),
+     switching by pressing Win+Ctrl+arrows once per desktop (there's no public API). The canvas
+     (a tool window) stays up across a switch; the old desktop's windows are cloaked and leave the
+     canvas, the new one's come back to their spots. Tiles show the desktop picture.
    - **Mac backlog items, not built on either:** window size snapping, low-motion mode.
 
-7. Next: taskbar previews over the overlay; the Spaces panel as virtual desktops.
+7. Next: taskbar previews over the overlay.
