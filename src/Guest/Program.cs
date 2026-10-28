@@ -105,6 +105,7 @@ try
             case "hwheel": Wheel(0x1000, int.Parse(args[++i])); break; // MOUSEEVENTF_HWHEEL
             case "wait": Thread.Sleep(int.Parse(args[++i])); break;
             case "cursor": Log($"cursor {CursorName()}"); break;
+            case "scale": SetScale(int.Parse(args[++i])); break; // the main display's scaling, in percent
             default: throw new ArgumentException($"unknown step {args[i]}");
         }
     }
@@ -194,6 +195,31 @@ static extern bool EnumDisplaySettings(string? device, int mode, ref DEVMODE dev
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 static extern int ChangeDisplaySettingsEx(string? device, ref DEVMODE devMode, nint hwnd, uint flags, nint param);
 
+// The main display's scaling (Settings > Display > Scale), through the undocumented
+// DisplayConfig device-info types -3/-4 that Settings uses: the scale is set as steps from the
+// display's recommended one.
+void SetScale(int percent)
+{
+    int[] steps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
+    int want = Array.IndexOf(steps, percent);
+    if (want < 0) throw new ArgumentException($"no {percent}% scale");
+    GetDisplayConfigBufferSizes(2 /* QDC_ONLY_ACTIVE_PATHS */, out uint paths, out uint modes);
+    var pathInfo = new byte[paths * 72];
+    var modeInfo = new byte[modes * 64];
+    int qr = QueryDisplayConfig(2, ref paths, pathInfo, ref modes, modeInfo, 0);
+    if (qr != 0 || paths == 0) throw new InvalidOperationException($"QueryDisplayConfig returned {qr}");
+    // The first active path's source: its adapter LUID and source id (the path's first 12 bytes).
+    long adapter = BitConverter.ToInt64(pathInfo, 0);
+    uint source = BitConverter.ToUInt32(pathInfo, 8);
+    var get = new DpiScaleGet { type = -3, size = (uint)Marshal.SizeOf<DpiScaleGet>(), adapter = adapter, id = source };
+    if (DisplayConfigGetDeviceInfo(ref get) != 0) throw new InvalidOperationException("couldn't read the scale");
+    int recommended = Math.Abs(get.minRel);
+    var set = new DpiScaleSet { type = -4, size = (uint)Marshal.SizeOf<DpiScaleSet>(), adapter = adapter, id = source, rel = want - recommended };
+    int sr = DisplayConfigSetDeviceInfo(ref set);
+    Log($"scale {steps[recommended + get.curRel]}% -> {percent}% (recommended {steps[recommended]}%): {sr}");
+    if (sr != 0) throw new InvalidOperationException($"DisplayConfigSetDeviceInfo returned {sr}");
+}
+
 // Which standard cursor is showing (screenshots don't include it).
 static string CursorName()
 {
@@ -207,6 +233,15 @@ static string CursorName()
 
 [DllImport("user32.dll")]
 static extern bool GetCursorInfo(ref CURSORINFO info);
+
+[DllImport("user32.dll")]
+static extern int GetDisplayConfigBufferSizes(uint flags, out uint paths, out uint modes);
+[DllImport("user32.dll")]
+static extern int QueryDisplayConfig(uint flags, ref uint paths, byte[] pathInfo, ref uint modes, byte[] modeInfo, nint topology);
+[DllImport("user32.dll")]
+static extern int DisplayConfigGetDeviceInfo(ref DpiScaleGet info);
+[DllImport("user32.dll")]
+static extern int DisplayConfigSetDeviceInfo(ref DpiScaleSet info);
 
 static void Send(INPUT input)
 {
@@ -230,3 +265,10 @@ struct DEVMODE
 
 [StructLayout(LayoutKind.Sequential)]
 struct CURSORINFO { public int cbSize, flags; public nint hCursor; public POINT ptScreenPos; }
+
+// DISPLAYCONFIG_DEVICE_INFO_HEADER, then the scale (relative to the recommended one).
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+struct DpiScaleGet { public int type; public uint size; public long adapter; public uint id; public int minRel, curRel, maxRel; }
+
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+struct DpiScaleSet { public int type; public uint size; public long adapter; public uint id; public int rel; }

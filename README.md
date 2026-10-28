@@ -65,6 +65,15 @@ Early days. What works so far:
 
   A smaller screen tightens the layout; going back puts it back exactly. Moves you make on the
   smaller screen carry over. Tidy Up tidies the home layout and caps window sizes too.
+- **Scaling changes** (Settings > Display > Scale) work like a change of screen size, as on the Mac:
+  the canvas grows or shrinks by the same ratio, so windows keep their size relative to what's in
+  them (Windows resizes most, and Expanse resizes the ones it doesn't), then the layout is fitted.
+  The saved layout and snapshots remember the scaling they were made at.
+- **The canvas is the main monitor's,** as on the Mac. With more than one monitor, windows on the
+  others are left alone; move one onto the main screen and it joins the canvas where you drop it,
+  move one of the canvas's windows onto another monitor and it leaves. Windows parked off the main
+  screen never wait on another monitor: one that would goes just past an edge of the main screen
+  with no monitor beyond it.
 - **Restore Layout** (tray menu): a snapshot of the layout is taken when it has changed and the
   last one is 15 minutes old; the newest three are kept. Picking one puts every window back where
   it had them, fitted to this screen and shown zoomed out. The layout it replaces becomes a
@@ -148,6 +157,8 @@ scripts/vm.sh build         # sync the source over and build everything
 scripts/vm.sh start         # (re)start Expanse on the VM's desktop (`start admin`: as administrator)
 scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, windows, log, pause, resume, bench 5, quit
 scripts/vm.sh ctl screen 640 480   # pretend the screen is that size (no size: the real one)
+scripts/vm.sh ctl monitor 1440 0 1920 1080   # pretend there's another monitor there (none: no pretend one)
+scripts/vm.sh guest scale 125      # the main display's scaling
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 scripts/vm.sh test          # the layout maths' tests
 ```

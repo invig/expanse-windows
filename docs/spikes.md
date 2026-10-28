@@ -183,4 +183,28 @@ backend, with 10 windows, in the same session:
      administrator later moved an admin window from where you'd been using it back to a spot
      saved in an earlier admin session (off screen, in the test).
 
-5. Several monitors and mixed DPI.
+5. ~~Several monitors and scaling~~, to the Mac's level (it doesn't do several displays yet; it
+   handles changes of resolution, size and monitor). Notes:
+   - **Scaling changes** come as WM_DPICHANGED (and a work-area change). Windows grew File
+     Explorer by 1.25 and Expanse's fit then shrank it back to its chosen size in pixels; Notepad,
+     parked off screen, wasn't rescaled at all. Now the canvas scales with the DPI (spots about the
+     middle of the view, chosen sizes, home spots, saved entries), so the fit agrees with Windows
+     and resizes the windows it skipped. 125% -> 100% -> 125% came back to within a pixel. Layouts
+     record their DPI and are converted on load.
+   - **Main screen only:** a window that turns up wholly on another monitor isn't taken on
+     (unless Expanse had it before: minimised, or saved by handle); one moved onto another monitor
+     leaves the canvas; one moved back joins where it's dropped. Partly on the main screen counts as
+     on it.
+   - **Parking:** a window wholly off the main screen whose spot is on another monitor, or nearer
+     one than the main screen (it'd take that monitor's scaling), waits 32 px past an edge of the
+     main screen with no monitor beyond, the side it's heading first.
+   - **Tested with a pretend monitor only** (`ctl screen 1000 900` plus `ctl monitor 1000 0 440
+     900`: the right of the VM's screen acts as the second monitor). A real second monitor, and one
+     at a different scaling, need a second display. The VM has one; the port plan's Virtual
+     Display Driver would add more, but means installing a driver and trusting its certificate
+     (whether UTM can give Windows a second display isn't checked).
+   - **Known gap:** a window straddling the main screen's edge shows on the neighbouring monitor,
+     and if most of it is there and that monitor's scaling differs, Windows rescales it.
+
+6. Next: the rings in stacking order, taskbar previews over the overlay, the minimised-window
+   size bug above.

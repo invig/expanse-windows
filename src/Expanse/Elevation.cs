@@ -56,8 +56,8 @@ static class Elevation
     }
 
     /// Starts another Expanse as administrator, after Windows asks you. It waits for this one to
-    /// hand over (see Program). False if you said no or it couldn't start.
-    public static bool StartElevated()
+    /// hand over (see Program). Null if it started; otherwise why not.
+    public static string? StartElevated()
     {
         var info = new SHELLEXECUTEINFO
         {
@@ -67,25 +67,20 @@ static class Elevation
             lpFile = Environment.ProcessPath,
             nShow = SW_SHOWNORMAL,
         };
-        if (Shell32.ShellExecuteEx(ref info)) return true;
+        if (Shell32.ShellExecuteEx(ref info)) return null;
         int error = Marshal.GetLastPInvokeError();
-        Log.Info(error == 1223 ? "run as administrator: you said no" : $"run as administrator: couldn't start (error {error})");
-        return false;
+        return error == 1223 ? "you said no" : $"couldn't start (error {error})";
     }
 
     /// Starts another Expanse as you, not administrator: through Explorer, since anything this
-    /// process starts itself would be elevated too.
-    public static bool StartNormal()
+    /// process starts itself would be elevated too. Null if it started; otherwise why not.
+    public static string? StartNormal()
     {
         try
         {
             Process.Start(new ProcessStartInfo("explorer.exe", $"\"{Environment.ProcessPath}\"") { UseShellExecute = false });
-            return true;
+            return null;
         }
-        catch (Exception e)
-        {
-            Log.Info($"run normally: couldn't start: {e.Message}");
-            return false;
-        }
+        catch (Exception e) { return $"couldn't start: {e.Message}"; }
     }
 }

@@ -71,6 +71,14 @@ sealed class Canvas
     bool screenResized;
     CanvasWindow? centreAfterResize; // the window you were in when the screen changed
     SizeD? screenOverride;           // `screen W H`: pretend the screen is that size (testing)
+    /// The canvas is the main screen's, as on the Mac. Other monitors: windows that turn up there
+    /// are left alone, and nothing parked may land on one (ParkingSpot).
+    List<RECT> otherMonitors = new();
+    readonly List<RECT> pretendMonitors = new(); // `monitor X Y W H`: another one, for testing
+    readonly HashSet<nint> elsewhere = new();    // windows on other monitors, left alone
+    /// The main screen's DPI now, and the DPI the canvas's pixels are for: when they differ, the
+    /// scaling changed and the canvas is scaled to match (ScaleCanvas).
+    uint dpi = PrimaryDpi(), canvasDpi = PrimaryDpi();
     /// Windows you resized by dragging an edge (Windows brackets that with MOVESIZESTART/END):
     /// their new size is the size you chose.
     readonly HashSet<nint> userSized = new();
@@ -128,6 +136,8 @@ sealed class Canvas
     void ReadScreen()
     {
         (monitor, work) = PrimaryMonitor();
+        dpi = PrimaryDpi();
+        otherMonitors = Monitors().Where(m => !m.primary).Select(m => m.monitor).Concat(pretendMonitors).ToList();
         if (screenOverride is SizeD o)
         {
             monitor = new RECT(monitor.Left, monitor.Top, monitor.Left + (int)o.W, monitor.Top + (int)o.H);
@@ -157,6 +167,15 @@ sealed class Canvas
             nint h = found[i];
             if (!known.TryGetValue(h, out var w))
             {
+                // A window that turns up on another monitor is left alone (the Mac takes on only
+                // windows on its screen), unless it's one Expanse had: minimised, or parked by the
+                // Expanse that handed over (saved by its handle).
+                if (!OnMainScreen(Dwm.FrameBounds(h)) && !departed.ContainsKey(h) && !savedPool.Any(e => e.Hwnd == h))
+                {
+                    if (elsewhere.Add(h)) Log.Info($"window 0x{h:X} \"{Title(h)}\" is on another monitor: left alone");
+                    continue;
+                }
+                elsewhere.Remove(h);
                 w = new CanvasWindow(h) { Maximised = IsZoomed(h) };
                 w.Frame = ScreenToCanvas(w.ReadScreenFrame());
                 w.Preferred = w.Frame.Size;
@@ -192,6 +211,14 @@ sealed class Canvas
                         w.Frame = w.Frame with { W = f.Width, H = f.Height };
                         w.Placed = null;
                     }
+                    else if (!OnMainScreen(f))
+                    {
+                        // You moved it onto another monitor: it's yours there, off the canvas, until
+                        // you bring it back.
+                        Log.Info($"window {w} moved to another monitor: off the canvas");
+                        elsewhere.Add(h);
+                        continue;
+                    }
                     else
                     {
                         var frame = ScreenToCanvas(f);
@@ -209,8 +236,9 @@ sealed class Canvas
         foreach (var gone in removed)
         {
             // Still there, just minimised, hidden or cloaked: it'll come back to its spot.
-            if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone;
-            Log.Info($"window {gone} {(IsWindow(gone.Hwnd) ? "left the canvas for now" : "gone")}");
+            if (elsewhere.Contains(gone.Hwnd)) { }
+            else if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone;
+            if (!elsewhere.Contains(gone.Hwnd)) Log.Info($"window {gone} {(IsWindow(gone.Hwnd) ? "left the canvas for now" : "gone")}");
             ownedLeft.AddRange(gone.Owned);
             gone.Owned.Clear();
         }
@@ -309,6 +337,8 @@ sealed class Canvas
     {
         ReadScreen();
         saved = LayoutStore.Load();
+        if (saved != null) LayoutStore.ToDpi(saved, dpi);
+        canvasDpi = dpi;
         savedPool = saved?.Windows.ToList() ?? new();
         if (saved != null)
         {
@@ -360,6 +390,7 @@ sealed class Canvas
         var layout = new SavedLayout
         {
             CenterX = camera.Center(ViewSize).X, CenterY = camera.Center(ViewSize).Y, CleanExit = cleanExit, HandOver = handOver,
+            Dpi = canvasDpi,
             Windows = windows.Concat(departed.Values.Where(w => IsWindow(w.Hwnd))).Select(LayoutStore.Entry)
                 .Concat(savedPool.Take(60)).ToList(),
         };
@@ -515,6 +546,11 @@ sealed class Canvas
         if (gliding) { SetTimer(overlay.Hwnd, final ? FinalRelayoutTimer : RelayoutTimer, 500, 0); return; }
         var oldSize = ViewSize;
         ReadScreen();
+        if (dpi != canvasDpi)
+        {
+            ScaleCanvas((double)dpi / canvasDpi);
+            canvasDpi = dpi;
+        }
         if (ViewSize != oldSize)
         {
             // Whatever was in the middle of the old screen stays in the middle of the new one.
@@ -662,6 +698,8 @@ sealed class Canvas
                     if (ev == EVENT_SYSTEM_MOVESIZEEND) userSized.Add(hwnd);
                     ScheduleSync();
                 }
+                // One on another monitor may be coming onto the main screen.
+                else if (!active && elsewhere.Contains(hwnd)) ScheduleSync();
                 break;
             case EVENT_OBJECT_SHOW:
             case EVENT_OBJECT_UNCLOAKED:
@@ -839,6 +877,7 @@ sealed class Canvas
         if (animation != null || drag != null) return;
         Save();
         if (lastLayout != null) Snapshot(lastLayout);
+        LayoutStore.ToDpi(layout, canvasDpi);
         var pool = layout.Windows.ToList();
         var open = OpenKeys();
         int restored = 0;
@@ -1316,6 +1355,12 @@ sealed class Canvas
         int y = (int)Math.Round(v.Y) + monitor.Top - w.Insets.Top;
         x = Math.Clamp(x, -30000, 30000);
         y = Math.Clamp(y, -30000, 30000);
+        if (otherMonitors.Count > 0)
+        {
+            int fx = x + w.Insets.Left, fy = y + w.Insets.Top;
+            var frame = new RECT(fx, fy, fx + (int)w.Frame.W, fy + (int)w.Frame.H);
+            if (!OnMainScreen(frame) && ParkingSpot(frame) is POINT p) (x, y) = (p.X - w.Insets.Left, p.Y - w.Insets.Top);
+        }
         w.Placed = new POINT(x + w.Insets.Left, y + w.Insets.Top);
         GetWindowRect(w.Hwnd, out var current);
         if (current.Left == x && current.Top == y) return false;
@@ -1327,6 +1372,79 @@ sealed class Canvas
         SetWindowPos(w.Hwnd, 0, x, y, 0, 0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         return true;
+    }
+
+    // MARK: Other monitors, scaling
+
+    /// Whether a frame (screen coordinates) is at least partly on the main screen.
+    bool OnMainScreen(RECT f) => Overlaps(f, monitor);
+
+    static bool Overlaps(RECT a, RECT b) => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
+
+    static double Gap(RECT a, RECT b)
+    {
+        int dx = Math.Max(0, Math.Max(b.Left - a.Right, a.Left - b.Right));
+        int dy = Math.Max(0, Math.Max(b.Top - a.Bottom, a.Top - b.Bottom));
+        return Math.Sqrt((double)dx * dx + (double)dy * dy);
+    }
+
+    /// Where a window wholly off the main screen waits. At its camera spot, if that's clear of
+    /// the other monitors and nearer the main screen than any of them; otherwise it'd show on one,
+    /// and take that monitor's scaling (Windows rescales a window by the monitor it's nearest).
+    /// Then just past the main screen's edge, on a side with no monitor, the side it's heading
+    /// first. Null: where it is will do (or no side is free).
+    POINT? ParkingSpot(RECT f)
+    {
+        bool Clear(RECT r) => otherMonitors.All(m => !Overlaps(r, m) && Gap(r, m) > Gap(r, monitor));
+        if (Clear(f)) return null;
+        int w = f.Width, h = f.Height;
+        int cx = monitor.Left + (monitor.Width - w) / 2, cy = monitor.Top + (monitor.Height - h) / 2;
+        const int Margin = 32; // past the window's shadow
+        RECT At(int x, int y) => new(x, y, x + w, y + h);
+        var sides = new (int beyond, RECT spot)[]
+        {
+            (monitor.Top - f.Bottom, At(cx, monitor.Top - Margin - h)),
+            (f.Top - monitor.Bottom, At(cx, monitor.Bottom + Margin)),
+            (monitor.Left - f.Right, At(monitor.Left - Margin - w, cy)),
+            (f.Left - monitor.Right, At(monitor.Right + Margin, cy)),
+        };
+        foreach (var (_, spot) in sides.OrderByDescending(s => s.beyond))
+            if (Clear(spot)) return new POINT(spot.Left, spot.Top);
+        return null;
+    }
+
+    /// The main screen's scaling changed (100% to 125%, say). Windows grows most windows by the
+    /// same ratio and some apps don't follow, so the canvas follows Windows: every spot and home
+    /// spot spreads from the middle of the view, and every chosen size grows, by `r`. The screen
+    /// then holds less of the canvas, and fitting the layout to it (the display-change pass)
+    /// brings each window to its chosen size, as for a smaller screen. As on the Mac, where scaling
+    /// changes the screen's size in points and windows keep theirs.
+    void ScaleCanvas(double r)
+    {
+        var c = camera.Center(ViewSize);
+        Vec P(Vec p) => new(Layout.Round(c.X + (p.X - c.X) * r), Layout.Round(c.Y + (p.Y - c.Y) * r));
+        SizeD Z(SizeD s) => new(Layout.Round(s.W * r), Layout.Round(s.H * r));
+        foreach (var w in windows.Concat(departed.Values))
+        {
+            var owned = w.Owned.Select(o => (o, o.Frame.Origin)).ToList();
+            // Maximised where it sits, Windows fits it to the screen as it is.
+            if (!(w.Maximised && !w.RestoredByUs))
+            {
+                var o = P(w.Frame.Origin);
+                w.Frame = w.Frame with { X = o.X, Y = o.Y }; // sizes are read from the windows
+                if (w.Home is Vec home) w.Home = P(home);
+            }
+            if (w.Preferred.W > 0) w.Preferred = Z(w.Preferred);
+            if (w.LastSized is SizeD l) w.LastSized = Z(l);
+            foreach (var (o, at) in owned)
+            {
+                var p = P(at);
+                o.Frame = o.Frame with { X = p.X, Y = p.Y };
+            }
+            w.Placed = null;
+        }
+        foreach (var e in savedPool) LayoutStore.Scale(e, c, r);
+        Log.Info($"scaling {canvasDpi * 100 / 96}% -> {dpi * 100 / 96}%: canvas scaled by {r:0.###}");
     }
 
     /// Up to ~10 frames for the windows that will be in view to reach their spots, so the
@@ -1621,6 +1739,10 @@ sealed class Canvas
                 Log.Info("display change");
                 DisplaysChanging();
                 return null;
+            case WM_DPICHANGED: // the main screen's scaling (the overlay lives on it)
+                Log.Info($"scaling change: {(int)(wParam & 0xFFFF) * 100 / 96}%");
+                DisplaysChanging();
+                return 0;
             case Overlay.WM_COMMAND_REQUEST:
             {
                 var handle = GCHandle.FromIntPtr(wParam);
@@ -1828,6 +1950,16 @@ sealed class Canvas
                 request.Reply(screenOverride is SizeD o ? $"pretending the screen is {o.W:0}x{o.H:0}" : "the real screen");
                 break;
             }
+            case "monitor":
+            {
+                // Pretend there's another monitor at X Y W H (testing several monitors), or none.
+                var v = arg.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(int.Parse).ToArray();
+                pretendMonitors.Clear();
+                if (v.Length == 4) pretendMonitors.Add(new RECT(v[0], v[1], v[0] + v[2], v[1] + v[3]));
+                DisplaysChanging(100);
+                request.Reply(v.Length == 4 ? $"pretending there's a monitor at {pretendMonitors[0]}" : "no pretend monitors");
+                break;
+            }
             case "snapshot":
                 Save();
                 if (lastLayout != null) Snapshot(lastLayout);
@@ -1900,6 +2032,9 @@ sealed class Canvas
             animating = animation != null,
             camera = new { x = camera.Origin.X, y = camera.Origin.Y, scale = camera.Scale },
             screen = monitor.ToString(),
+            otherMonitors = otherMonitors.Select(m => m.ToString()),
+            dpi,
+            elsewhere = elsewhere.Select(h => $"0x{h:X} {Title(h)}"),
             workArea = work.ToString(),
             foreground = new { hwnd = $"0x{fg:X}", title = Title(fg) },
             hovered = hovered?.ToString(),
@@ -1958,7 +2093,12 @@ sealed class Canvas
     void ToggleAdminWindows()
     {
         bool want = !Elevation.IsElevated;
-        if (active || !(want ? Elevation.StartElevated() : Elevation.StartNormal())) return;
+        if (active) return;
+        if ((want ? Elevation.StartElevated() : Elevation.StartNormal()) is string why)
+        {
+            Log.Info($"{(want ? "run as administrator" : "run as you")}: {why}");
+            return;
+        }
         settings.RunAsAdmin = want;
         settings.Save();
         Log.Info(want ? "handing over to Expanse run as administrator" : "handing over to Expanse run as you");

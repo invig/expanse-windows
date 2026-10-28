@@ -24,7 +24,11 @@ if (!first)
 Log.Info($"Expanse starting (pid {Environment.ProcessId}, {(Elevation.IsElevated ? "as administrator" : "not as administrator")})");
 // Include Admin Windows is on: run as administrator (Windows asks). Nothing's been touched yet,
 // so the new one simply starts; said no, this one carries on without admin windows.
-if (Settings.Load().RunAsAdmin && !Elevation.IsElevated && Elevation.StartElevated()) return 0;
+if (Settings.Load().RunAsAdmin && !Elevation.IsElevated)
+{
+    if (Elevation.StartElevated() is string why) Log.Info($"run as administrator: {why}");
+    else return 0;
+}
 // Handed over (see Canvas.HandOver): the windows are where the last run left them on purpose.
 // Otherwise anything in originals.json is from a crash, and those windows go back.
 if (LayoutStore.Load()?.HandOver != true) Originals.RestoreFromFile();

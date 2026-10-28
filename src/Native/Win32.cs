@@ -121,6 +121,11 @@ public struct SHELLEXECUTEINFO
     public nint hIconOrMonitor, hProcess;
 }
 
+public static class Shcore
+{
+    [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(nint monitor, int type, out uint x, out uint y);
+}
+
 public static class Advapi32
 {
     const string Dll = "advapi32.dll";
@@ -371,6 +376,26 @@ public static class User32
         GetMonitorInfo(MonitorFromPoint(new POINT(0, 0), MONITOR_DEFAULTTOPRIMARY), ref mi);
         return (mi.rcMonitor, mi.rcWork);
     }
+
+    /// The main monitor's scaling, as a DPI (96 is 100%).
+    public static uint PrimaryDpi() =>
+        Shcore.GetDpiForMonitor(MonitorFromPoint(new POINT(0, 0), MONITOR_DEFAULTTOPRIMARY), 0, out uint x, out _) == 0 ? x : 96;
+
+    /// Every monitor's rect, and which is the main one.
+    public static List<(RECT monitor, bool primary)> Monitors()
+    {
+        var found = new List<(RECT, bool)>();
+        EnumDisplayMonitors(0, 0, (nint m, nint _, ref RECT _, nint _) =>
+        {
+            var mi = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfo(m, ref mi)) found.Add((mi.rcMonitor, (mi.dwFlags & 1) != 0)); // MONITORINFOF_PRIMARY
+            return true;
+        }, 0);
+        return found;
+    }
+
+    public delegate bool MonitorEnumProc(nint monitor, nint hdc, ref RECT rect, nint data);
+    [DllImport(Dll)] public static extern bool EnumDisplayMonitors(nint hdc, nint clip, MonitorEnumProc proc, nint data);
 
     public static nint RegisterWindowClass(string name, WndProc proc, nint cursor = 0)
     {

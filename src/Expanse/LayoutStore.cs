@@ -16,6 +16,8 @@ sealed class SavedLayout
     /// The last run handed over to a new one (run as administrator, or back): windows are where
     /// it left them, and its originals.json carries over.
     public bool HandOver { get; set; }
+    /// The main screen's DPI it was saved at (0: not recorded). Spots and sizes are in its pixels.
+    public uint Dpi { get; set; }
     public List<SavedWindow> Windows { get; set; } = new();
 }
 
@@ -74,6 +76,29 @@ static class LayoutStore
     /// a hash: enough to recognise the same window next time, not to read the title.
     public static string TitleKey(string title) =>
         title.Length == 0 ? "" : "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(title))[..12]);
+
+    /// Converts a layout saved at another scaling to `dpi`: spots spread from its middle, and sizes
+    /// grow or shrink, by the ratio (see Canvas.ScaleCanvas).
+    public static void ToDpi(SavedLayout layout, uint dpi)
+    {
+        if (layout.Dpi == 0 || layout.Dpi == dpi) { layout.Dpi = dpi; return; }
+        double r = (double)dpi / layout.Dpi;
+        foreach (var e in layout.Windows) Scale(e, new Vec(layout.CenterX, layout.CenterY), r);
+        Log.Info($"layout: saved at {layout.Dpi * 100 / 96}% scaling, now {dpi * 100 / 96}%: scaled by {r:0.###}");
+        layout.Dpi = dpi;
+    }
+
+    /// One entry's spots spread from `c`, and its sizes, by `r`.
+    public static void Scale(SavedWindow e, Vec c, double r)
+    {
+        double P(double v, double from) => Layout.Round(from + (v - from) * r);
+        double Z(double v) => Layout.Round(v * r);
+        (e.X, e.Y, e.W, e.H) = (P(e.X, c.X), P(e.Y, c.Y), Z(e.W), Z(e.H));
+        if (e.HX is double hx) e.HX = P(hx, c.X);
+        if (e.HY is double hy) e.HY = P(hy, c.Y);
+        if (e.PW is double pw) e.PW = Z(pw);
+        if (e.PH is double ph) e.PH = Z(ph);
+    }
 
     public static SavedWindow Entry(CanvasWindow w) => new()
     {

@@ -9,6 +9,7 @@
     <Compile Include="..\Expanse\Conversions.cs" Link="Shared\Conversions.cs" />
     <ProjectReference Include="..\Layout\Layout.csproj" />
     <Compile Include="..\Expanse\CanvasWindow.cs" Link="Shared\CanvasWindow.cs" />
+    <Compile Include="..\Expanse\Elevation.cs" Link="Shared\Elevation.cs" />
     <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
