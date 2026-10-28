@@ -71,6 +71,10 @@ sealed class SharedVisualPictures : IPictures
     readonly Dictionary<nint, MarkLayer> markLayers = new();
     IDCompositionSurface? closeSurface;
     double closeScale;
+    readonly IDCompositionVisual2 minimapVisual;
+    IDCompositionSurface? minimapSurface;
+    (int w, int h) minimapSize;
+    MinimapDrawing? minimapDrawn;
     readonly ID2D1Factory1 d2dFactory;
     readonly ID2D1Device d2dDevice;
     readonly ID2D1DeviceContext d2d;
@@ -116,6 +120,8 @@ sealed class SharedVisualPictures : IPictures
         device.CreateVisual(out titles);
         root.AddVisual(titles, false, null);
         guides = new Strips(this, 1f, 0.22f, 0.37f);
+        device.CreateVisual(out minimapVisual);
+        root.AddVisual(minimapVisual, false, null);
         device.Commit();
         Log.Info($"pictures: shared visuals (D3D11 {driver})");
     }
@@ -360,6 +366,85 @@ sealed class SharedVisualPictures : IPictures
         rects.Add(new RectD(o.Right - t, o.Y + t, t, o.H - 2 * t));
     }
 
+    /// The minimap, drawn with Direct2D into a surface of its own and redrawn only when what it
+    /// shows changes. Colours after the Mac's: marks dark on a light panel, light on a dark one;
+    /// the view in the accent colour.
+    public bool SetMinimap(MinimapDrawing? minimap, double scale)
+    {
+        if (minimap is not MinimapDrawing m)
+        {
+            if (minimapDrawn != null) { minimapVisual.SetContent(null); minimapDrawn = null; }
+            return true;
+        }
+        if (minimapDrawn is MinimapDrawing last && last.Same(m)) return true;
+        int w = (int)Math.Ceiling(m.Panel.W), h = (int)Math.Ceiling(m.Panel.H);
+        if (minimapSurface == null || minimapSize != (w, h))
+        {
+            minimapSurface?.Dispose();
+            device.CreateSurface((uint)w, (uint)h, Format.B8G8R8A8_UNorm, AlphaMode.Premultiplied, out var created);
+            minimapSurface = created;
+            minimapSize = (w, h);
+        }
+        float k = (float)scale;
+        System.Drawing.RectangleF Local(RectD r) => new((float)(r.X - m.Panel.X), (float)(r.Y - m.Panel.Y), (float)r.W, (float)r.H);
+        static float Radius(RectD r, float lo, float hi, double share) =>
+            (float)Math.Min(Math.Min(hi, Math.Max(lo, Math.Min(r.W, r.H) * share)), Math.Min(r.W, r.H) / 2);
+        var accent = new Color4(76 / 255f, 154 / 255f, 1f, 1f);
+        using (var dxgi = minimapSurface.BeginDraw<IDXGISurface>(null, out Vortice.Mathematics.Int2 offset))
+        using (var bitmap = d2d.CreateBitmapFromDxgiSurface(dxgi, new BitmapProperties1(
+                   new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied), 96, 96,
+                   BitmapOptions.Target | BitmapOptions.CannotDraw)))
+        using (var panel = d2d.CreateSolidColorBrush(m.Dark ? new Color4(0.12f, 0.12f, 0.13f, 0.9f) : new Color4(0.97f, 0.97f, 0.98f, 0.9f)))
+        using (var edge = d2d.CreateSolidColorBrush(m.Dark ? new Color4(1f, 1f, 1f, 0.12f) : new Color4(0f, 0f, 0f, 0.1f)))
+        using (var block = d2d.CreateSolidColorBrush(m.Dark ? new Color4(1f, 1f, 1f, 0.38f) : new Color4(0f, 0f, 0f, 0.2f)))
+        using (var seam = d2d.CreateSolidColorBrush(m.Dark ? new Color4(0.12f, 0.12f, 0.13f, 0.5f) : new Color4(0f, 0f, 0f, 0.24f)))
+        using (var tint = d2d.CreateSolidColorBrush(new Color4(accent.R, accent.G, accent.B, m.Dark ? 0.14f : 0.1f)))
+        using (var ring = d2d.CreateSolidColorBrush(m.FramesAll ? (m.Dark ? new Color4(1f, 1f, 1f, 0.35f) : new Color4(0f, 0f, 0f, 0.28f)) : accent))
+        using (var ink = d2d.CreateSolidColorBrush(m.Dark ? new Color4(1f, 1f, 1f, 1f) : new Color4(0f, 0f, 0f, 0.75f)))
+        using (var titleFont = dwrite.CreateTextFormat("Segoe UI", FontWeight.SemiBold, Vortice.DirectWrite.FontStyle.Normal, 11 * k))
+        using (var zoomFont = dwrite.CreateTextFormat("Segoe UI", FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, 11 * k))
+        {
+            zoomFont.TextAlignment = TextAlignment.Trailing;
+            d2d.Target = bitmap;
+            d2d.BeginDraw();
+            d2d.Transform = Matrix3x2.CreateTranslation(offset.X, offset.Y);
+            d2d.PushAxisAlignedClip(new Vortice.RawRectF(0, 0, w, h), AntialiasMode.Aliased);
+            d2d.Clear(new Color4(0, 0, 0, 0));
+            float corner = 12 * k;
+            var panelRect = new System.Drawing.RectangleF(0.5f, 0.5f, (float)m.Panel.W - 1, (float)m.Panel.H - 1);
+            d2d.FillRoundedRectangle(new RoundedRectangle(panelRect, corner, corner), panel);
+            d2d.DrawRoundedRectangle(new RoundedRectangle(panelRect, corner, corner), edge, 1);
+            if (!m.FramesAll)
+            {
+                float vr = Radius(m.Viewport, 3 * k, 12 * k, 0.14);
+                d2d.FillRoundedRectangle(new RoundedRectangle(Local(m.Viewport), vr, vr), tint);
+            }
+            foreach (var r in m.Windows)
+            {
+                float rr = Radius(r, 2 * k, 3 * k, 0.18);
+                var rect = new RoundedRectangle(Local(r), rr, rr);
+                d2d.FillRoundedRectangle(rect, block);
+                d2d.DrawRoundedRectangle(rect, seam, m.Dark ? 0.75f * k : 0.5f * k);
+            }
+            // The ring stands off the windows inside it: a frame round what you see, not one more
+            // (selected) window.
+            var outer = m.Viewport.Inset(-Minimap.RingOutset * k, -Minimap.RingOutset * k);
+            float outerRadius = Radius(m.Viewport, 3 * k, 12 * k, 0.14) + (float)(Minimap.RingOutset * k);
+            d2d.DrawRoundedRectangle(new RoundedRectangle(Local(outer), outerRadius, outerRadius), ring, (m.FramesAll ? 1 : 2) * k);
+            d2d.DrawText("Expanse", titleFont, new Vortice.RawRectF(14 * k, 9 * k, 134 * k, 25 * k), ink);
+            d2d.DrawText(m.Zoom, zoomFont, new Vortice.RawRectF(w - 74 * k, 9 * k, w - 14 * k, 25 * k), ink);
+            d2d.PopAxisAlignedClip();
+            d2d.EndDraw();
+            d2d.Target = null;
+        }
+        minimapSurface.EndDraw();
+        minimapVisual.SetContent(minimapSurface);
+        minimapVisual.SetOffsetX((float)Math.Round(m.Panel.X));
+        minimapVisual.SetOffsetY((float)Math.Round(m.Panel.Y));
+        minimapDrawn = m;
+        return true;
+    }
+
     /// The close button: a dark, three-quarters opaque circle with a white ×, as on the Mac.
     void DrawClose(double scale)
     {
@@ -525,6 +610,8 @@ sealed class SharedVisualPictures : IPictures
         marqueeFill.Dispose();
         guides.Dispose();
         closeSurface?.Dispose();
+        minimapSurface?.Dispose();
+        minimapVisual.Dispose();
         foreach (var f in fonts.Values) f.Dispose();
         titles.Dispose();
         canvas.Dispose();

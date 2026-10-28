@@ -50,6 +50,10 @@ interface IPictures : IDisposable
     /// marquee being dragged, and close buttons.
     void SetMarks(Marks marks, double scale);
 
+    /// The minimap (bottom right, zoomed out), or none. False if this kind can't draw it (the
+    /// caller draws it on the backdrop instead).
+    bool SetMinimap(MinimapDrawing? minimap, double scale);
+
     /// Puts everything changed since the last call on screen, in one go (one composition
     /// commit): pictures, titles, ring and guides move together.
     void Present();
@@ -150,6 +154,7 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     public bool DrawsDecorations => false;
     public void SetLabels(IReadOnlyList<Label> labels, double scale) { }
     public void SetMarks(Marks marks, double scale) { }
+    public bool SetMinimap(MinimapDrawing? minimap, double scale) => false;
     public void Present() { }
 
     /// The next Moved sends it again, with the new source rect.

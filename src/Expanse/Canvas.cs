@@ -84,7 +84,8 @@ sealed class Canvas
     /// their new size is the size you chose.
     readonly HashSet<nint> userSized = new();
 
-    enum DragKind { Windows, Marquee, Pan }
+    enum DragKind { Windows, Marquee, Pan, Minimap }
+    readonly Minimap minimap = new();
 
     /// A press on the zoomed-out canvas: on a window (it moves, with the rest of the selection if
     /// it's in one), on empty canvas (a marquee), or with Space held (the canvas pans).
@@ -927,7 +928,14 @@ sealed class Canvas
     /// the selection with Shift.
     void Press(Vec p, bool shift)
     {
-        if (spaceHeld) drag = new Drag(DragKind.Pan, p);
+        if (minimap.Panel.Contains(p))
+        {
+            // The minimap: the view goes where you click, and follows as you drag.
+            drag = new Drag(DragKind.Minimap, p);
+            minimap.Frozen = true;
+            CentreOn(minimap.CanvasPoint(p));
+        }
+        else if (spaceHeld) drag = new Drag(DragKind.Pan, p);
         else if (WindowAt(p) is CanvasWindow w)
         {
             double k = UiScale;
@@ -964,6 +972,10 @@ sealed class Canvas
         var d = drag!;
         switch (d.What)
         {
+            case DragKind.Minimap:
+                d.Moved = true;
+                CentreOn(minimap.CanvasPoint(p));
+                return;
             case DragKind.Pan:
                 d.Moved = true;
                 PanBy(p - d.Last);
@@ -1007,6 +1019,7 @@ sealed class Canvas
         ReleaseCapture();
         ShowGuides(new());
         marquee = null;
+        minimap.Frozen = false;
         switch (d.What)
         {
             case DragKind.Windows when d.Moved:
@@ -1049,6 +1062,15 @@ sealed class Canvas
         camera.Zoom(camera.Scale * factor, anchor);
         returnCamera = null;
         HoverAtCursor();
+        Relayout();
+    }
+
+    /// The view's middle to canvas point `c`, at the same zoom (the minimap).
+    void CentreOn(Vec c)
+    {
+        CancelAnimation();
+        camera = Camera.Centered(c, camera.Scale, ViewSize);
+        returnCamera = null;
         Relayout();
     }
 
@@ -1720,6 +1742,7 @@ sealed class Canvas
                 return 0;
             case WM_SETTINGCHANGE when lParam != 0 && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet":
                 tray.ThemeChanged();
+                minimap.ThemeChanged();
                 return null;
             case WM_HOTKEY:
                 switch ((int)wParam)
@@ -1847,7 +1870,7 @@ sealed class Canvas
     void Hover(Vec p)
     {
         if (!active || gliding || animation != null) return;
-        var w = WindowAt(p);
+        var w = minimap.Panel.Contains(p) ? null : WindowAt(p);
         if (w == hovered) return;
         hovered = w;
         Redraw();
@@ -1875,8 +1898,12 @@ sealed class Canvas
         double k = UiScale;
         pictures.SetLabels(show && settings.ShowNames ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
         pictures.SetMarks(show ? CurrentMarks(k) : Marks.None, k);
+        pictures.SetMinimap(show ? MinimapNow(k) : null, k);
         pictures.Present();
     }
+
+    MinimapDrawing MinimapNow(double k) =>
+        minimap.Update(windows.Select(w => w.Frame).ToList(), camera.ToCanvas(View), camera.Scale, ViewSize, k);
 
     /// Rings round the hovered and selected windows, the box round a selection of more than one,
     /// the marquee, and the × buttons showing.
@@ -1960,6 +1987,18 @@ sealed class Canvas
         }
         if (marks.SelectionBox is RectD box) Outline(box.Inset(-8 * k, -8 * k), thin);
         if (marks.Marquee is RectD m) Outline(m, thin);
+        // The minimap, plainly (DWM thumbnails cover anything drawn here, so it's drawn where it
+        // mostly won't be under one: the bottom-right corner).
+        var map = MinimapNow(k);
+        nint panelBrush = Gdi32.CreateSolidBrush(map.Dark ? Gdi32.RGB(31, 31, 33) : Gdi32.RGB(247, 247, 250));
+        nint blockBrush = Gdi32.CreateSolidBrush(map.Dark ? Gdi32.RGB(118, 118, 120) : Gdi32.RGB(198, 198, 200));
+        RECT R(RectD r) => new((int)Math.Round(r.X), (int)Math.Round(r.Y), (int)Math.Round(r.Right), (int)Math.Round(r.Bottom));
+        var panelRect = R(map.Panel);
+        FillRect(hdc, ref panelRect, panelBrush);
+        foreach (var b in map.Windows) { var br = R(b); FillRect(hdc, ref br, blockBrush); }
+        Outline(map.Viewport.Inset(-Minimap.RingOutset * k, -Minimap.RingOutset * k), Math.Max(1, (int)Math.Round((map.FramesAll ? 1 : 2) * k)));
+        Gdi32.DeleteObject(panelBrush);
+        Gdi32.DeleteObject(blockBrush);
         Gdi32.DeleteObject(blue);
         if (!guidesOverPictures && guides.Count > 0)
         {
