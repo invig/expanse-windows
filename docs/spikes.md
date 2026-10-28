@@ -252,4 +252,7 @@ backend, with 10 windows, in the same session:
      `DwmIsCompositionEnabled`, waits a second after DWM's back, and makes new shared visuals
      (about 1.5 s in the VM).
 
-7. Next: taskbar previews over the overlay.
+7. ~~Taskbar previews over the overlay~~ (checked 28 Oct): the overlay covers the taskbar, so
+   previews only show while the shell's own UI is up (Win opens Start and the taskbar over the
+   canvas; Esc puts the canvas back on top and focused), as the Dock and Spotlight do over the
+   Mac's canvas. Notifications show over it too, as on the Mac. Nothing to change.
