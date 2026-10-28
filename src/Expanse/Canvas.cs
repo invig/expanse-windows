@@ -21,6 +21,7 @@ sealed class Canvas
     readonly Settings settings = Settings.Load();
     readonly Tray tray;
     readonly WinEvents events;
+    readonly DesktopInput desktopInput;
     /// Bottom-most first: the last window is the frontmost, as in the Mac app.
     readonly List<CanvasWindow> windows = new();
     readonly List<Request> idleWaiters = new();
@@ -126,6 +127,7 @@ sealed class Canvas
         Log.Info($"screen {monitor}, work area {work}, dpi {GetDpiForWindow(overlay.Hwnd)}");
         tray = new Tray(overlay.Hwnd);
         events = new WinEvents(OnWindowEvent);
+        desktopInput = new DesktopInput(overlay.Hwnd);
         lastFocusedWindow = GetForegroundWindow();
     }
 
@@ -1084,6 +1086,19 @@ sealed class Canvas
 
     double UiScale => GetDpiForWindow(overlay.Hwnd) / 96.0;
 
+    /// A wheel turn zoomed out, as on the Mac: the wheel (and a touchpad's two-finger scroll) pans;
+    /// with Ctrl (and a touchpad pinch, which arrives as Ctrl+wheel) it zooms around the pointer;
+    /// Shift turns a plain wheel sideways. `at`: the pointer, in screen coordinates (packed).
+    void Wheel(bool horizontal, int delta, bool ctrl, bool shift, nint at)
+    {
+        var screen = new Vec((short)(at & 0xFFFF), (short)((at >> 16) & 0xFFFF));
+        double step = 0.5 * UiScale; // 60 px a notch at 100%
+        if (horizontal) PanBy(new Vec(-delta * step, 0));
+        else if (ctrl) ZoomBy(Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top));
+        else if (shift) PanBy(new Vec(delta * step, 0));
+        else PanBy(new Vec(0, delta * step));
+    }
+
     // MARK: Closing
 
     const int CloseMinWidth = 220; // no × on pictures narrower than this (as on the Mac)
@@ -1222,7 +1237,8 @@ sealed class Canvas
 
     /// Raises the overlay with every picture exactly over its real window, then (zoomOut)
     /// animates out to every window.
-    public void Enter(bool zoomOut, bool sync = true)
+    /// `overview`: false rises at 100% without zooming out (moving around from where you are).
+    public void Enter(bool zoomOut, bool sync = true, bool overview = true)
     {
         if (active)
         {
@@ -1253,6 +1269,7 @@ sealed class Canvas
             lastOverlayFocus = Focus(overlay.Hwnd);
             Log.Info($"zoom out: {windows.Count} windows; overlay foreground {lastOverlayFocus}");
             returnCamera = camera;
+            if (!overview) { HoverAtCursor(); return; }
             // The pointer may already be over a window, with no move to tell us.
             Animate(OverviewCamera(), 0.22, () =>
             {
@@ -1679,6 +1696,7 @@ sealed class Canvas
                 Save();
                 return 0;
             case WM_TIMER when wParam == HotCornerTimer:
+                desktopInput.Armed = !active && !paused;
                 if (!paused && !gliding && animation == null && drag == null && hotCorner.Poll(settings.HotCorner, monitor))
                 {
                     Log.Info($"hot corner ({settings.HotCorner})");
@@ -1741,13 +1759,28 @@ sealed class Canvas
                 // a touchpad pinch, which arrives as Ctrl+wheel) it zooms around the pointer. Shift
                 // turns a plain wheel sideways.
                 if (!active || gliding || drag != null) return 0;
-                var screen = new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF));
-                int delta = (short)((wParam >> 16) & 0xFFFF), keys = (int)(wParam & 0xFFFF);
-                double step = 0.5 * UiScale; // 60 px a notch at 100%
-                if (msg == WM_MOUSEHWHEEL) PanBy(new Vec(-delta * step, 0));
-                else if ((keys & MK_CONTROL) != 0) ZoomBy(Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top));
-                else if ((keys & MK_SHIFT) != 0) PanBy(new Vec(delta * step, 0));
-                else PanBy(new Vec(0, delta * step));
+                int keys = (int)(wParam & 0xFFFF);
+                Wheel(msg == WM_MOUSEHWHEEL, (short)((wParam >> 16) & 0xFFFF), (keys & MK_CONTROL) != 0, (keys & MK_SHIFT) != 0, lParam);
+                return 0;
+            }
+            case DesktopInput.WM_DESKTOP_CLICK:
+                if (!active && !paused && !gliding &&
+                    DesktopInput.NothingSelected(new POINT((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF))))
+                {
+                    Log.Info("click on the desktop");
+                    Enter(zoomOut: true);
+                }
+                return 0;
+            case DesktopInput.WM_DESKTOP_WHEEL:
+            {
+                // From 100%: the overlay rises where you are, and this turn (and the ones after,
+                // which reach the overlay itself) moves around the canvas, as on the Mac.
+                if (active || paused || gliding) return 0;
+                Log.Info("scroll on the desktop: moving around from 100%");
+                Enter(zoomOut: true, overview: false);
+                int flags = (int)(wParam & 0xFFFF);
+                Wheel((flags & DesktopInput.Horizontal) != 0, (short)((wParam >> 16) & 0xFFFF),
+                    (flags & DesktopInput.Ctrl) != 0, (flags & DesktopInput.Shift) != 0, lParam);
                 return 0;
             }
             case WM_SETCURSOR when active && (spaceHeld || drag?.What == DragKind.Pan):
@@ -2278,6 +2311,7 @@ sealed class Canvas
     void HandOver()
     {
         events.Dispose();
+        desktopInput.Dispose();
         tray.Dispose();
         Save(handOver: true);
         Originals.Save(windows);
@@ -2287,6 +2321,7 @@ sealed class Canvas
     public void Quit()
     {
         events.Dispose();
+        desktopInput.Dispose();
         tray.Dispose();
         if (!paused)
         {
