@@ -13,7 +13,7 @@ sealed class Settings
     public bool Wallpaper { get; set; } = true;
 
     /// Hot Corner: which corner of the main screen zooms out when the pointer rests there (see
-    /// HotCorner for the choices and why the default is the top-left).
+    /// HotCorner for the choices; every corner to begin with, as on the Mac).
     public string HotCorner { get; set; } = Expanse.HotCorner.Default;
 
     /// Show Window Names: a label over each picture zoomed out (the app's name; the window's title

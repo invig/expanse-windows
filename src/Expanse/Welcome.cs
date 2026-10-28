@@ -150,7 +150,7 @@ static class Welcome
         string cornerName = HotCorner.Choices.FirstOrDefault(c => c.key == corner).title ?? "";
         string tryIt = corner == "off"
             ? "Press Ctrl + Alt + ` to zoom out, then click any window to dive back in."
-            : $"Rest the pointer in the {(corner == "all" ? "any" : cornerName.ToLowerInvariant())} corner of the screen (or press Ctrl + Alt + `), then click any window to dive back in.";
+            : $"Rest the pointer in {(corner == "all" ? "any" : "the " + cornerName.ToLowerInvariant())} corner of the screen (or press Ctrl + Alt + `), then click any window to dive back in.";
         y += Text(tryIt, Font(13.5, 600), ink, y, x, right - x) + S(10);
         foreach (var p in problems)
             y += Text(p, Font(12.5, 400), Gdi32.RGB(176, 72, 0), y, x, right - x) + S(6);

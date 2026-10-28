@@ -10,8 +10,8 @@ It does what the Mac app does, bar update checks (see [docs/spikes.md](docs/spik
 left and why):
 
 - **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
-  layout), by resting the pointer in the top-left corner of the screen (the **Hot Corner**, tray
-  menu), or by clicking empty desktop: every window, live, at its spot on the canvas. **Show Window
+  layout), by resting the pointer in any corner of the screen (the **Hot Corner**, tray menu:
+  every corner as on the Mac, or just one, or off), or by clicking empty desktop: every window, live, at its spot on the canvas. **Show Window
   Names** (tray) puts each app's name above its picture (the window's title too when the pointer is
   on it); off by default, as on the Mac, since titles can be private.
 - **The minimap** (bottom right, zoomed out) shows every window and where you are; click or drag in

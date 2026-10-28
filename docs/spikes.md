@@ -225,8 +225,9 @@ backend, with 10 windows, in the same session:
 6. ~~Parity with the Mac app~~ (28 Oct, overnight): the minimised-window record (a window back
    from being minimised keeps where it was, its home spot, chosen size and maximised state), logs
    without titles plus Detailed Logging and Copy Logs, Show Window Names (off by default), the hot
-   corner (top-left by default: on Windows the top-right is where you fling the pointer to close a
-   maximised window, and the bottom-right is Show Desktop), Centre Current Window and the
+   corner (every corner by default, as on the Mac; Matthew's call on 29 Oct over top-left only,
+   since on Windows the top-right is where you fling the pointer to close a maximised window, and
+   the bottom-right is Show Desktop), Centre Current Window and the
    auto-centre hotkey, Restore All Windows, Open at Login, clicking and scrolling the empty desktop
    (a low-level mouse hook on its own thread), the minimap, Welcome & Shortcuts, `expanse://`
    links, dialogs shown over the canvas, VM and remote-screen windows sizing themselves, and a view

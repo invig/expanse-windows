@@ -8,9 +8,9 @@ namespace Expanse;
 /// (cheap, and it works whichever app is in front), fired after a moment there with no button
 /// held, and armed again once the pointer leaves the corner.
 ///
-/// Windows' default differs from the Mac's (every corner): the top-right corner is where you
-/// fling the pointer to close a maximised window, and the bottom-right is Show Desktop, so only
-/// the top-left is on to begin with.
+/// Every corner to begin with, as on the Mac. On Windows the top-right is also where you fling
+/// the pointer to close a maximised window, and the bottom-right is Show Desktop; the dwell (and
+/// no button held) keeps a quick fling or click from zooming out.
 sealed class HotCorner
 {
     public static readonly (string key, string title)[] Choices =
@@ -18,7 +18,7 @@ sealed class HotCorner
         ("off", "Off"), ("all", "All Corners"), ("topLeft", "Top Left"), ("topRight", "Top Right"),
         ("bottomLeft", "Bottom Left"), ("bottomRight", "Bottom Right"),
     };
-    public const string Default = "topLeft";
+    public const string Default = "all";
 
     const double Dwell = 0.06;   // seconds in the corner
     const int Tolerance = 3;     // pixels from the edge that count as the corner
