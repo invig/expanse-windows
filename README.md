@@ -39,6 +39,11 @@ Early days. What works so far:
 - **A tray icon** (Expanse's glyph from the Mac menu bar): click it to zoom out, right-click for
   the menu: Open, Pause/Resume, Auto-Centre Focused Window, Desktop Picture Background, Quit.
   Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep it in view.
+- **The canvas is saved** (`%LOCALAPPDATA%\Expanse\layout.json`, a second after changes, and on
+  pause or quit). Starting again puts the view and every window back where they were. An app opened
+  later that had windows last time gets their spots back. Windows are matched by the same window
+  while its app keeps running, then by app and title, then by app. Titles are stored only as
+  hashes.
 - **Pausing or quitting** puts every window back where it was before Expanse moved it, as does the
   next start after a crash (`Expanse.exe --restore` does it by hand).
 

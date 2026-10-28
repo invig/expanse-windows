@@ -10,8 +10,8 @@ sealed class CanvasWindow
     public readonly nint Hwnd;
     public readonly uint Pid;
     public readonly string Class;
-    /// The exe's name ("msedge").
-    public readonly string App;
+    /// The exe's name ("msedge") and full path.
+    public readonly string App, AppPath;
     /// What to call it: the exe's description ("Microsoft Edge"), as the Mac shows app names.
     public readonly string AppName;
     public string Title;
@@ -31,6 +31,7 @@ sealed class CanvasWindow
         Class = ClassName(hwnd);
         string? path = Kernel32.ProcessPath(Pid);
         App = Path.GetFileNameWithoutExtension(path ?? "?");
+        AppPath = path ?? "";
         Title = User32.Title(hwnd);
         AppName = DisplayName(path, App, Title);
     }

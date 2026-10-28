@@ -136,7 +136,8 @@ backend, with 10 windows, in the same session:
    Tidy Up, new windows in free space~~: done. Still to come:
    - **Tidy Up capping window sizes at the screen,** as the Mac does.
    - **Selecting several windows** (box-select, Shift-click) to drag them as a group.
-   - **The saved layout,** and with it the home layout for smaller screens.
+   - ~~The saved layout~~: done. Still to come: the home layout for smaller screens, and Restore
+     Layout (snapshots).
    - **Taskbar previews and notifications** can sit above the overlay.
    - **Restoring a minimised window that was parked off-screen** brought it back once at 1/1.25
      of its size (the VM's scale factor). Expanse doesn't resize windows, so this looks like

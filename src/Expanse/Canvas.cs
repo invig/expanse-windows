@@ -44,8 +44,13 @@ sealed class Canvas
     /// Windows that became visible since the last sync (EVENT_OBJECT_SHOW): the new ones among
     /// them are placed in free space.
     readonly HashSet<nint> shownRecently = new();
-    /// Spots of windows minimised, hidden or cloaked: they come back to them.
-    readonly Dictionary<nint, RectD> departed = new();
+    /// Windows minimised, hidden or cloaked: they come back to their spots.
+    readonly Dictionary<nint, CanvasWindow> departed = new();
+    /// The layout saved by the last run, and its entries no window has claimed yet: an app opened
+    /// later that had windows last time gets their spots.
+    SavedLayout? saved;
+    List<SavedWindow> savedPool = new();
+    string? lastSavedJson;
 
     sealed class Drag(CanvasWindow window, Vec startPoint)
     {
@@ -133,7 +138,7 @@ sealed class Canvas
         foreach (var gone in removed)
         {
             // Still there, just minimised, hidden or cloaked: it'll come back to its spot.
-            if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone.Frame;
+            if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone;
             Log.Info($"window {gone} {(IsWindow(gone.Hwnd) ? "left the canvas for now" : "gone")}");
         }
         foreach (var h in departed.Keys.Where(h => !IsWindow(h)).ToList()) departed.Remove(h);
@@ -143,10 +148,61 @@ sealed class Canvas
     }
 
     /// The first sync: windows already open stay where they are.
+    /// The first sync: the layout saved last time comes back (Mac: the first window scan). The
+    /// camera first, so windows it doesn't know keep their real position; then each window it
+    /// does goes back to its spot.
     public void Start()
     {
+        (monitor, work) = PrimaryMonitor();
+        saved = LayoutStore.Load();
+        savedPool = saved?.Windows.ToList() ?? new();
+        if (saved != null)
+        {
+            camera = Camera.Centered(new Vec(saved.CenterX, saved.CenterY), 1, ViewSize);
+            camera.Origin = new Vec(Layout.Round(camera.Origin.X), Layout.Round(camera.Origin.Y));
+        }
         Sync();
+        var open = OpenKeys();
+        int restored = windows.Count(w => TakeSavedSpot(w, open));
+        int moved = Commit();
+        Log.Info(saved == null ? "no saved layout" : $"saved layout: {restored} of {windows.Count} windows back at their spots ({moved} moved)");
         initialSyncDone = true;
+        Save();
+    }
+
+    HashSet<(long, uint)> OpenKeys() =>
+        windows.Concat(departed.Values).Select(w => ((long)w.Hwnd, w.Pid)).ToHashSet();
+
+    /// Its saved spot, if the last run had one for it (see LayoutStore.TakeMatch).
+    bool TakeSavedSpot(CanvasWindow w, ISet<(long, uint)> open)
+    {
+        if (LayoutStore.TakeMatch(w, open, savedPool) is not SavedWindow e) return false;
+        w.Frame = w.Frame with { X = e.X, Y = e.Y };
+        return true;
+    }
+
+    // MARK: Saving
+
+    const nint SaveTimer = 3;
+
+    /// A second after the last change, as on the Mac.
+    void ScheduleSave()
+    {
+        if (initialSyncDone && !paused) SetTimer(overlay.Hwnd, SaveTimer, 1000, 0);
+    }
+
+    /// `cleanExit`: windows are about to be put back where they were (quit, pause).
+    void Save(bool cleanExit = false)
+    {
+        if (paused || !initialSyncDone) return;
+        // Windows away (minimised, hidden) keep their spots too, and so do saved ones not open now.
+        var layout = new SavedLayout
+        {
+            CenterX = camera.Center(ViewSize).X, CenterY = camera.Center(ViewSize).Y, CleanExit = cleanExit,
+            Windows = windows.Concat(departed.Values.Where(w => IsWindow(w.Hwnd))).Select(LayoutStore.Entry)
+                .Concat(savedPool.Take(60)).ToList(),
+        };
+        lastSavedJson = LayoutStore.Save(layout, lastSavedJson);
     }
 
     /// A window that wasn't on the canvas appeared. Back from minimise (or hidden, or another
@@ -155,14 +211,23 @@ sealed class Canvas
     /// the Mac.
     void Arrive(CanvasWindow w)
     {
-        if (departed.Remove(w.Hwnd, out var spot))
+        if (departed.Remove(w.Hwnd, out var away))
         {
-            w.Frame = spot with { W = w.Frame.W, H = w.Frame.H };
+            w.Frame = away.Frame with { W = w.Frame.W, H = w.Frame.H };
             Log.Info($"{w} back at its spot {w.Frame}");
             if (!active) Place(w);
             return;
         }
-        if (!initialSyncDone || !shownRecently.Contains(w.Hwnd)) return;
+        if (!initialSyncDone) return;
+        if (TakeSavedSpot(w, OpenKeys()))
+        {
+            // An app opened now that had windows last time: quietly back to their spot (focus
+            // decides whether the view goes there), as on the Mac.
+            Log.Info($"{w} back at its saved spot {w.Frame}");
+            if (!active) Place(w);
+            return;
+        }
+        if (!shownRecently.Contains(w.Hwnd)) return;
         var anchor = windows.FirstOrDefault(x => x.Hwnd == lastFocusedWindow && x != w);
         var visible = camera.ToCanvas(new RectD(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height));
         var others = windows.Where(x => x != w).Select(x => x.Frame).ToList();
@@ -264,6 +329,7 @@ sealed class Canvas
         var (added, removed) = Sync();
         foreach (var w in added) Arrive(w);
         shownRecently.Clear();
+        ScheduleSave();
         // An arrival may have started a glide, whose pictures are already up.
         if (!wasActive || gliding || (added.Count == 0 && removed.Count == 0)) return;
         foreach (var w in removed)
@@ -401,7 +467,7 @@ sealed class Canvas
         drag = null;
         ReleaseCapture();
         ShowGuides(new());
-        if (d.Moved) Log.Info($"dragged {d.Window} to {d.Window.Frame}");
+        if (d.Moved) { Log.Info($"dragged {d.Window} to {d.Window.Frame}"); ScheduleSave(); }
         else if (click) { Log.Info($"click on {d.Window}"); Exit(d.Window); }
         Redraw();
     }
@@ -420,20 +486,24 @@ sealed class Canvas
     public void Pause()
     {
         if (paused || active) return;
+        Save(cleanExit: true);
         Originals.Restore(windows);
         paused = true;
         tray.SetTip("Expanse (paused)");
         Log.Info("paused");
     }
 
-    /// Starts again from the windows as they are now, at 100%.
+    /// Like a fresh launch: the canvas comes back from the layout saved by Pause.
     public void Resume()
     {
         if (!paused) return;
         paused = false;
         windows.Clear();
+        departed.Clear();
         camera = Camera.Identity;
-        Sync();
+        initialSyncDone = false;
+        lastSavedJson = null;
+        Start();
         tray.SetTip("Expanse");
         Log.Info("resumed");
     }
@@ -577,6 +647,7 @@ sealed class Canvas
         returnCamera = null;
         Log.Info($"handed back: moved {moved} windows, waited {waited} frames, {Ms(t0):0}ms");
         if (pendingSync) { pendingSync = false; SyncLive(); }
+        ScheduleSave();
         CompleteIdleWaiters();
     }
 
@@ -769,6 +840,10 @@ sealed class Canvas
             case WM_TIMER when wParam == SyncTimer:
                 KillTimer(overlay.Hwnd, SyncTimer);
                 SyncLive();
+                return 0;
+            case WM_TIMER when wParam == SaveTimer:
+                KillTimer(overlay.Hwnd, SaveTimer);
+                Save();
                 return 0;
             case WM_TIMER when wParam == FocusTimer:
                 KillTimer(overlay.Hwnd, FocusTimer);
@@ -1098,7 +1173,11 @@ sealed class Canvas
     {
         events.Dispose();
         tray.Dispose();
-        if (!paused) Originals.Restore(windows);
+        if (!paused)
+        {
+            Save(cleanExit: true);
+            Originals.Restore(windows);
+        }
         PostQuitMessage(0);
     }
 
