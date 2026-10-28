@@ -6,11 +6,16 @@ one to glide straight to it.
 
 <p align="center"><img src="docs/images/milestone-zoomed-out.jpg" alt="Zoomed out: every window live on the canvas" width="720"></p>
 
-Early days. What works so far:
+It does what the Mac app does, bar update checks and the Spaces panel (see
+[docs/spikes.md](docs/spikes.md) for what's left and why):
 
 - **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
-  layout): every window, live, at its spot on the canvas, with its app's name above it (the window's
-  title too when the pointer is on it).
+  layout), by resting the pointer in the top-left corner of the screen (the **Hot Corner**, tray
+  menu), or by clicking empty desktop: every window, live, at its spot on the canvas. **Show Window
+  Names** (tray) puts each app's name above its picture (the window's title too when the pointer is
+  on it); off by default, as on the Mac, since titles can be private.
+- **The minimap** (bottom right, zoomed out) shows every window and where you are; click or drag in
+  it to move there.
 - **Click a window** to glide to it at 100%, centred in the work area and focused. The other windows
   move with the canvas, off-screen if that's where the camera puts them.
 - <kbd>Ctrl</kbd> <kbd>Alt</kbd> + arrow keys **hop to the nearest window in that direction**,
@@ -32,7 +37,10 @@ Early days. What works so far:
   zooms around the pointer; or hold <kbd>Space</kbd> and drag. <kbd>0</kbd> fits every window,
   <kbd>1</kbd> zooms to 100%, <kbd>-</kbd> and <kbd>=</kbd> zoom out and in. <kbd>Esc</kbd> or the
   hotkey again goes back to where you were, or, once you've moved the view, to 100% where you're
-  looking.
+  looking. Scrolling over empty desktop starts moving around from 100%. Once you've placed the view
+  yourself, clicking a window that's partly on screen leaves it where it is.
+- <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> centres the window you're in;
+  <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>`</kbd> turns Auto-Centre on or off.
 - **Select several windows** with <kbd>Shift</kbd>-click, by dragging a box over empty canvas
   (<kbd>Shift</kbd> adds to the selection), or with <kbd>Ctrl</kbd> <kbd>A</kbd>; <kbd>Esc</kbd>
   clears it. Dragging any of them moves them all, snapping as one block.
@@ -48,8 +56,22 @@ Early days. What works so far:
   Focus coming back to the window you were already in (after the taskbar or Start menu) doesn't
   count.
 - **A tray icon** (Expanse's glyph from the Mac menu bar): click it to zoom out, right-click for
-  the menu: Open, Pause/Resume, Auto-Centre Focused Window, Desktop Picture Background, Quit.
-  Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep it in view.
+  the menu, as on the Mac: Open, Pause/Resume, Centre Current Window, Auto-Centre, Desktop Picture
+  Background, Show Window Names, Hot Corner, Tidy Up, Restore Layout, Restore All Windows (the last
+  resort: every window off the screen stacked into view), Include Admin Windows, Welcome &
+  Shortcuts, Open at Login, Troubleshooting (Detailed Logging, Copy Logs for a Bug Report, Show Log
+  File), Quit. Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep
+  it in view.
+- **Welcome & Shortcuts** opens on first launch: the shortcuts, where the hot corner is, and any
+  shortcut another app holds.
+- **The log never has window titles** (what Expanse did with which app's windows), and is written
+  to a file only with Detailed Logging on.
+- **`expanse://` links** for scripting, as on the Mac: `start expanse://tidy`; also toggle, enter,
+  exit, centre, fit, restore, pause, resume, `nav?dir=left`, `focus?app=Notepad`,
+  `layout?snapshot=0`, `zoom?scale=0.5`, `pan?dx=100&dy=0`.
+- **Dialogs stay in reach.** Zoomed out, a dialog asking you something (a window's "Save
+  changes?", another app's always-on-top prompt) shows over the canvas. VM and remote-desktop
+  windows (Remote Desktop, Hyper-V, VirtualBox, VMware, Parsec…) keep the size their app gives them.
 - **The canvas is saved** (`%LOCALAPPDATA%\Expanse\layout.json`, a second after changes, and on
   pause or quit). Starting again puts the view and every window back where they were. An app opened
   later that had windows last time gets their spots back. Windows are matched by the same window

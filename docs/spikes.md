@@ -222,4 +222,25 @@ backend, with 10 windows, in the same session:
      SetDisplayConfig with SDC_TOPOLOGY_EXTEND). The guest helper's `res W H N`, `scale P N` and
      `shotall` (`vm.sh shot FILE all`) take a display.
 
-6. Next: taskbar previews over the overlay.
+6. ~~Parity with the Mac app~~ (28 Oct, overnight): the minimised-window record (a window back
+   from being minimised keeps where it was, its home spot, chosen size and maximised state), logs
+   without titles plus Detailed Logging and Copy Logs, Show Window Names (off by default), the hot
+   corner (top-left by default: on Windows the top-right is where you fling the pointer to close a
+   maximised window, and the bottom-right is Show Desktop), Centre Current Window and the
+   auto-centre hotkey, Restore All Windows, Open at Login, clicking and scrolling the empty desktop
+   (a low-level mouse hook on its own thread), the minimap, Welcome & Shortcuts, `expanse://`
+   links, dialogs shown over the canvas, VM and remote-screen windows sizing themselves, and a view
+   you placed staying put. Notes:
+   - **Focus:** when Windows refuses a switch, tapping a key no app uses (VK 0xFF) unlocks the
+     foreground as well as Alt does, without Alt's side effect: an Alt tap lands in the window in
+     front, and WinUI apps (Notepad, Settings) show their key tips.
+   - **Dialogs:** the Mac lowers the canvas under a dialog. On Windows a dialog is an ordinary
+     window, not above the canvas, so it's the other way round: the asking dialog is made
+     always-on-top for the while (and brought onto the screen if its window put it off it).
+   - **Not done, needs Matthew:** update checks (there's no release channel or repo for the
+     Windows build yet) and Report an Issue (no repo to point at).
+   - **Not done yet:** the Spaces panel. Windows' virtual desktops are the nearest thing; reading
+     them is easy (the registry), switching has no public API (Win+Ctrl+arrows would do).
+   - **Mac backlog items, not built on either:** window size snapping, low-motion mode.
+
+7. Next: taskbar previews over the overlay; the Spaces panel as virtual desktops.
