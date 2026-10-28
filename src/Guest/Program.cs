@@ -1,0 +1,113 @@
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using Expanse.Native;
+using static Expanse.Native.User32;
+
+// Guest: test helper that runs on the VM's desktop (started by scripts/guest/desk.ps1, since
+// programs started over SSH can't see or touch the desktop). Steps run in order:
+//   shot PATH        screenshot of the primary screen, as PNG
+//   move X Y         pointer to X,Y (physical pixels)
+//   click X Y        move there and left-click
+//   key COMBO        e.g. ctrl+alt+grave, esc, alt+tab (sent as scan codes)
+//   wait MS
+// Results and errors go to out\guest.log (a desktop program has nowhere else to print).
+string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "expanse-windows", "out", "guest.log");
+Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+void Log(string s) => File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} {s}\n");
+
+var (monitor, _) = PrimaryMonitor();
+try
+{
+    for (int i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "shot": Shot(args[++i]); break;
+            case "move": Move(int.Parse(args[++i]), int.Parse(args[++i])); break;
+            case "click":
+                Move(int.Parse(args[++i]), int.Parse(args[++i]));
+                Thread.Sleep(30);
+                Mouse(MOUSEEVENTF_LEFTDOWN);
+                Thread.Sleep(40);
+                Mouse(MOUSEEVENTF_LEFTUP);
+                Log($"click {args[i - 1]},{args[i]}");
+                break;
+            case "key": Key(args[++i]); break;
+            case "wait": Thread.Sleep(int.Parse(args[++i])); break;
+            default: throw new ArgumentException($"unknown step {args[i]}");
+        }
+    }
+    return 0;
+}
+catch (Exception e)
+{
+    Log($"failed: {e}");
+    return 1;
+}
+
+void Shot(string path)
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+    using var bmp = new Bitmap(monitor.Width, monitor.Height, PixelFormat.Format32bppRgb);
+    using (var g = Graphics.FromImage(bmp))
+    {
+        nint dst = g.GetHdc();
+        nint screen = GetDC(0);
+        // CAPTUREBLT includes layered windows (our UI layer sits in one).
+        Gdi32.BitBlt(dst, 0, 0, monitor.Width, monitor.Height, screen, monitor.Left, monitor.Top, Gdi32.SRCCOPY | Gdi32.CAPTUREBLT);
+        ReleaseDC(0, screen);
+        g.ReleaseHdc(dst);
+    }
+    bmp.Save(path, ImageFormat.Png);
+    Log($"shot {path} {monitor.Width}x{monitor.Height}");
+}
+
+void Move(int x, int y)
+{
+    var input = new INPUT { type = INPUT_MOUSE };
+    input.u.mi.dx = (int)((x - monitor.Left) * 65535.0 / (monitor.Width - 1));
+    input.u.mi.dy = (int)((y - monitor.Top) * 65535.0 / (monitor.Height - 1));
+    input.u.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+    Send(input);
+}
+
+void Mouse(uint flags)
+{
+    var input = new INPUT { type = INPUT_MOUSE };
+    input.u.mi.dwFlags = flags;
+    Send(input);
+}
+
+void Key(string combo)
+{
+    var codes = combo.ToLowerInvariant().Split('+').Select(ScanCode).ToList();
+    foreach (var c in codes) Send(KeyInput(c, up: false));
+    Thread.Sleep(40);
+    foreach (var c in Enumerable.Reverse(codes)) Send(KeyInput(c, up: true));
+    Log($"key {combo}");
+}
+
+static INPUT KeyInput(ushort scan, bool up)
+{
+    var input = new INPUT { type = INPUT_KEYBOARD };
+    input.u.ki.wScan = (ushort)(scan & 0xFF);
+    input.u.ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0) | ((scan & 0xE000) == 0xE000 ? KEYEVENTF_EXTENDEDKEY : 0);
+    return input;
+}
+
+static ushort ScanCode(string name) => name switch
+{
+    "ctrl" => 0x1D, "alt" => 0x38, "shift" => 0x2A, "win" => 0xE05B,
+    "esc" => 0x01, "grave" or "`" => 0x29, "tab" => 0x0F, "enter" => 0x1C, "space" => 0x39,
+    "left" => 0xE04B, "right" => 0xE04D, "up" => 0xE048, "down" => 0xE050,
+    "t" => 0x14, "w" => 0x11, "0" => 0x0B, "1" => 0x02,
+    _ => throw new ArgumentException($"unknown key {name}"),
+};
+
+static void Send(INPUT input)
+{
+    if (SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>()) != 1)
+        throw new InvalidOperationException($"SendInput failed ({Marshal.GetLastPInvokeError()})");
+}

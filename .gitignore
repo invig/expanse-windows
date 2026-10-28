@@ -1,0 +1,8 @@
+artifacts/
+bin/
+obj/
+out/
+*.user
+.vs/
+.DS_Store
+.vm.env

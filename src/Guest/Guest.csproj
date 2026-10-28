@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>Guest</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Native\*.cs" Link="Native\%(Filename)%(Extension)" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
+</Project>
