@@ -185,7 +185,8 @@ public static class User32
 
     public const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8, MOD_NOREPEAT = 0x4000;
     public const uint MAPVK_VSC_TO_VK = 1;
-    public const int VK_ESCAPE = 0x1B, VK_MENU = 0x12, VK_CONTROL = 0x11, VK_SHIFT = 0x10, VK_LWIN = 0x5B;
+    public const int VK_ESCAPE = 0x1B, VK_MENU = 0x12, VK_CONTROL = 0x11, VK_SHIFT = 0x10, VK_LWIN = 0x5B,
+        VK_RETURN = 0x0D, VK_LEFT = 0x25, VK_UP = 0x26, VK_RIGHT = 0x27, VK_DOWN = 0x28;
 
     public const uint PM_REMOVE = 1;
     public const uint MONITOR_DEFAULTTOPRIMARY = 1, MONITOR_DEFAULTTONEAREST = 2;

@@ -35,6 +35,7 @@ sealed class Canvas
     nint lastFocusedWindow; // the canvas window you were last in
     (nint hwnd, long at) lastOwnFocus;
     CanvasWindow? hovered;
+    CanvasWindow? glideTarget; // where the glide or dive in flight is heading
     nint previousForeground;
     Animation? animation;
     Bench? bench;
@@ -150,6 +151,7 @@ sealed class Canvas
     // MARK: Live tracking
 
     const nint SyncTimer = 1, FocusTimer = 2;
+    public const int HotkeyCanvas = 1, HotkeyLeft = 2, HotkeyRight = 3, HotkeyUp = 4, HotkeyDown = 5;
 
     /// A window event (see WinEvents). Nothing heavy happens here: comings and goings and moves
     /// are gathered into one sync 50 ms after the last of them, and focus acts where it settles
@@ -235,6 +237,55 @@ sealed class Canvas
         Glide(w);
     }
 
+    // MARK: Hops
+
+    /// Ctrl+Alt+arrow (or an arrow, zoomed out): the nearest window that way (Layout.Nearest).
+    /// At 100% the view glides to it and it gets focus; zoomed out the highlight moves and the
+    /// view follows. Mid-glide, the glide re-aims from the window it was heading to.
+    public void Navigate(Direction direction)
+    {
+        if (paused) return;
+        if (gliding)
+        {
+            if (glideTarget != null && Nearest(direction, glideTarget.Frame) is CanvasWindow next)
+            {
+                Log.Info($"hop {direction} (chained) to {next}");
+                BringToFront(next);
+                glideTarget = next;
+                Animate(FocusCamera(next), 0.3, () => HandBack(next));
+            }
+            return;
+        }
+        if (animation != null) return;
+        var centre = camera.Center(ViewSize);
+        RectD from;
+        if (active) from = (hovered ?? windows.LastOrDefault())?.Frame ?? new RectD(centre.X, centre.Y, 0, 0);
+        else if (windows.FirstOrDefault(w => w.Hwnd == GetForegroundWindow()) is CanvasWindow current) from = current.Frame;
+        else from = new RectD(centre.X, centre.Y, 0, 0);
+        if (Nearest(direction, from) is not CanvasWindow target) return;
+        Log.Info($"hop {direction} to {target}");
+
+        if (active)
+        {
+            hovered = target;
+            Animate(Camera.Centered(target.Frame.Center, camera.Scale, ViewSize), 0.25);
+            return;
+        }
+        // With auto-centre on, every hop centres its window: a hop that only moved focus to a
+        // window already on screen looked like nothing happened (as on the Mac).
+        var r = camera.ToView(target.Frame);
+        if (!settings.AutoCentre && View.Inset(-1, -1).Contains(r))
+        {
+            BringToFront(target);
+            lastFocus = $"{target}: {Focus(target.Hwnd)}";
+            lastFocusedWindow = target.Hwnd;
+        }
+        else Glide(target);
+    }
+
+    CanvasWindow? Nearest(Direction direction, RectD from) =>
+        Layout.Nearest(direction, from, windows.Select(w => w.Frame).ToList()) is int i ? windows[i] : null;
+
     // MARK: Pause, tray menu
 
     /// Puts every window back where it was before Expanse moved it and stops following them.
@@ -310,7 +361,12 @@ sealed class Canvas
             lastOverlayFocus = Focus(overlay.Hwnd);
             Log.Info($"zoom out: {windows.Count} windows; overlay foreground {lastOverlayFocus}");
             returnCamera = camera;
-            Animate(OverviewCamera(), 0.22);
+            // The pointer may already be over a window, with no move to tell us.
+            Animate(OverviewCamera(), 0.22, () =>
+            {
+                GetCursorPos(out var p);
+                hovered = WindowAt(new Vec(p.X - monitor.Left, p.Y - monitor.Top));
+            });
         }
     }
 
@@ -352,6 +408,7 @@ sealed class Canvas
         else target = returnCamera ?? Camera.Centered(camera.Center(ViewSize), 1, ViewSize);
         gliding = true;
         hovered = null;
+        glideTarget = focus;
         Log.Info(focus != null ? $"dive into {focus}" : "back to 100%");
         Animate(target, duration, () => HandBack(focus));
     }
@@ -386,6 +443,7 @@ sealed class Canvas
         pictures.Detach();
         active = false;
         gliding = false;
+        glideTarget = null;
         returnCamera = null;
         Log.Info($"handed back: moved {moved} windows, waited {waited} frames, {Ms(t0):0}ms");
         if (pendingSync) { pendingSync = false; SyncLive(); }
@@ -432,7 +490,7 @@ sealed class Canvas
             if (inView.All(Landed)) return frame;
             Dwm.DwmFlush();
         }
-        var late = inView.Where(w => !Landed(w)).Select(w => $"{w} at {RectD.From(Dwm.FrameBounds(w.Hwnd))}, not {w.Placed!.Value.X},{w.Placed.Value.Y}");
+        var late = inView.Where(w => !Landed(w)).Select(w => $"{w} at {Dwm.FrameBounds(w.Hwnd).ToRectD()}, not {w.Placed!.Value.X},{w.Placed.Value.Y}");
         Log.Info($"hand-back: still moving after 10 frames: {string.Join("; ", late)}");
         return 10;
     }
@@ -550,13 +608,7 @@ sealed class Canvas
         a.Completion?.Invoke();
         if (animation == null)
         {
-            if (active && !gliding)
-            {
-                // The pointer may already be over a window, with no move to tell us.
-                GetCursorPos(out var p);
-                hovered = WindowAt(new Vec(p.X - monitor.Left, p.Y - monitor.Top));
-                overlay.Invalidate();
-            }
+            if (active && !gliding) overlay.Invalidate();
             CompleteIdleWaiters();
         }
     }
@@ -590,8 +642,14 @@ sealed class Canvas
                 tray.ThemeChanged();
                 return null;
             case WM_HOTKEY:
-                Log.Info("hotkey");
-                Toggle();
+                switch ((int)wParam)
+                {
+                    case HotkeyCanvas: Log.Info("hotkey"); Toggle(); break;
+                    case HotkeyLeft: Navigate(Direction.Left); break;
+                    case HotkeyRight: Navigate(Direction.Right); break;
+                    case HotkeyUp: Navigate(Direction.Up); break;
+                    case HotkeyDown: Navigate(Direction.Down); break;
+                }
                 return 0;
             case WM_MOUSEMOVE:
                 Hover(new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)));
@@ -618,7 +676,16 @@ sealed class Canvas
                 return 0;
             }
             case WM_KEYDOWN:
-                if ((int)wParam == VK_ESCAPE) Exit(null);
+                if (!active || gliding) return 0;
+                switch ((int)wParam)
+                {
+                    case VK_ESCAPE: Exit(null); break;
+                    case VK_RETURN when windows.Count > 0: Exit(hovered ?? windows[^1]); break;
+                    case VK_LEFT: Navigate(Direction.Left); break;
+                    case VK_RIGHT: Navigate(Direction.Right); break;
+                    case VK_UP: Navigate(Direction.Up); break;
+                    case VK_DOWN: Navigate(Direction.Down); break;
+                }
                 return 0;
             case WM_SYSCOMMAND when (wParam & 0xFFF0) == SC_KEYMENU:
                 return 0; // Alt (ours, from the focus fallback, or the user's) mustn't enter menu mode
@@ -742,6 +809,7 @@ sealed class Canvas
                 request.Reply(pictures.Name);
                 break;
             case "bench": StartBench(request, double.TryParse(arg, out double secs) ? secs : 5); break;
+            case "hop" when Enum.TryParse<Direction>(arg, ignoreCase: true, out var d): Navigate(d); WhenIdle(request); break;
             case "pause": Pause(); request.Reply(State()); break;
             case "resume": Resume(); request.Reply(State()); break;
             case "autocentre":
@@ -754,7 +822,7 @@ sealed class Canvas
                 Quit();
                 break;
             default:
-                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, pause, resume, autocentre on|off, bench [SECONDS], quit");
+                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, hop left|right|up|down, pause, resume, autocentre on|off, bench [SECONDS], quit");
                 break;
         }
     }
@@ -799,7 +867,7 @@ sealed class Canvas
                 title = w.Title,
                 canvas = w.Frame.ToString(),
                 view = camera.ToView(w.Frame).ToString(),
-                screen = RectD.From(Dwm.FrameBounds(w.Hwnd)).ToString(),
+                screen = Dwm.FrameBounds(w.Hwnd).ToRectD().ToString(),
             }),
         }, new JsonSerializerOptions { WriteIndented = true });
     }

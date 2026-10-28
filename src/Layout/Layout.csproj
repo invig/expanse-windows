@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The canvas maths and geometry: no Windows APIs, so it's testable on its own. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Expanse.Layout</AssemblyName>
+    <RootNamespace>Expanse</RootNamespace>
+  </PropertyGroup>
+</Project>

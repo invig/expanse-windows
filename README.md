@@ -12,6 +12,10 @@ Early days. What works so far:
   layout): every window, live, at its spot on the canvas, with its title above it.
 - **Click a window** to glide to it at 100%, centred in the work area and focused. The other windows
   move with the canvas, off-screen if that's where the camera puts them.
+- <kbd>Ctrl</kbd> <kbd>Alt</kbd> + arrow keys **hop to the nearest window in that direction**,
+  glide to it and focus it (Ctrl+arrows is word-jump in every app and Win+arrows is Snap, so
+  Ctrl+Alt). Zoomed out, the arrows alone move the highlight and the view follows; <kbd>Return</kbd>
+  dives into it.
 - <kbd>Esc</kbd> or the hotkey again goes back to where you were; the mouse wheel zooms around the
   pointer.
 - **Windows are tracked live.** New windows join the canvas where they open, closed ones leave it,
@@ -65,6 +69,8 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
 | `src/Ctl` | `expansectl`: sends commands to the running app over a named pipe |
 | `src/Guest` | Test helper on the VM's desktop: screenshots, clicks, keys |
 | `src/Spikes` | Week-one experiments (pictures, parking, focus) |
+| `src/Layout` | The canvas maths (nearest window, Tidy Up, free spots, snapping) and geometry, no Windows APIs |
+| `src/Layout.Tests` | Its tests: by hand, and against the Mac app's own Swift on random layouts |
 | `src/Native` | Hand-written Win32 declarations shared by all of them |
 | `scripts/vm.sh` | Drives the dev VM from the Mac |
 
@@ -80,7 +86,14 @@ scripts/vm.sh build         # sync the source over and build everything
 scripts/vm.sh start         # (re)start Expanse on the VM's desktop
 scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, pause, resume, bench 5, quit
 scripts/vm.sh shot          # out/shot.png: the VM's screen
+scripts/vm.sh test          # the layout maths' tests
 ```
+
+**The layout maths is a line-for-line port of the Mac app's** (nearest window, derive, separate,
+clusters, Tidy Up, free spots, snapping). `scripts/layout-oracle.py` takes those functions from the
+Mac checkout (`../CANVAS`), runs them on random layouts with Swift, and writes
+`tests/layout-fixtures.json`. `src/Layout.Tests` requires the C# to give exactly the same answers.
+Run the script again when the Mac's maths changes.
 
 Settings live in `%LOCALAPPDATA%\Expanse\settings.json`. Expanse logs to
 `%LOCALAPPDATA%\Expanse\expanse.log` in the VM (`scripts/vm.sh ctl log` shows the

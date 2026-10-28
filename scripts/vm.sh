@@ -4,6 +4,7 @@
 #   scripts/vm.sh setup            one-time: OpenSSH with this Mac's key, .NET 10 SDK (via UTM's guest agent)
 #   scripts/vm.sh sync             copy the source to %USERPROFILE%\expanse-windows in the VM
 #   scripts/vm.sh build [PROJ...]  sync and build (default: every project under src/)
+#   scripts/vm.sh test             sync and run the layout maths' tests (src/Layout.Tests)
 #   scripts/vm.sh start            (re)start Expanse on the VM's desktop
 #   scripts/vm.sh stop             quit Expanse (every window goes back where it was)
 #   scripts/vm.sh ctl CMD...       expansectl: state, zoomout, pick TITLE, back, bench S, log...
@@ -93,13 +94,17 @@ case ${1:-} in
   sync) sync ;;
   build)
     shift
-    projects=${*:-Expanse Ctl Guest Spikes}
+    projects=${*:-Expanse Ctl Guest Spikes Layout.Tests}
     sync
     stop
     case " $projects " in *" Spikes "*) ssh_vm 'taskkill /im Spikes.exe /f >nul 2>&1 & exit 0' ;; esac
     cmd="cd $REPO"
     for p in $projects; do cmd="$cmd && dotnet build src\\$p -c Debug -nologo -v q -clp:NoSummary"; done
     ssh_vm "$cmd"
+    ;;
+  test)
+    sync
+    ssh_vm "cd $REPO && dotnet run --project src\\Layout.Tests -c Debug -v q"
     ;;
   start)
     stop
@@ -123,7 +128,7 @@ case ${1:-} in
   snapshot) "$UTMCTL" snapshot create "$VM_NAME" "${2:?name}" ;;
   restore) "$UTMCTL" snapshot restore "$VM_NAME" "${2:?name}" ;;
   *)
-    sed -n '2,18p' "$0"
+    sed -n '2,19p' "$0"
     exit 1
     ;;
 esac

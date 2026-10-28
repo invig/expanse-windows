@@ -33,8 +33,13 @@ AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 // Ctrl+Alt + the key below Esc (` on a US layout, ` ¬ on a UK one), found by scan code so it's
 // the same key on every layout. Alt+` alone is the Japanese IME toggle.
 uint vk = MapVirtualKey(0x29, MAPVK_VSC_TO_VK);
-bool hotkey = RegisterHotKey(overlay.Hwnd, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk);
+bool hotkey = RegisterHotKey(overlay.Hwnd, Canvas.HotkeyCanvas, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk);
 Log.Info(hotkey ? $"hotkey Ctrl+Alt+VK 0x{vk:X2}" : "couldn't register Ctrl+Alt+`: something else has it");
+// Hops: Ctrl+Alt+arrows (Ctrl+arrows is word-jump everywhere, Win+arrows is Snap).
+foreach (var (id, key, name) in new[] { (Canvas.HotkeyLeft, VK_LEFT, "Left"), (Canvas.HotkeyRight, VK_RIGHT, "Right"),
+                                         (Canvas.HotkeyUp, VK_UP, "Up"), (Canvas.HotkeyDown, VK_DOWN, "Down") })
+    if (!RegisterHotKey(overlay.Hwnd, id, MOD_CONTROL | MOD_ALT, (uint)key))
+        Log.Info($"couldn't register Ctrl+Alt+{name}: something else has it");
 
 new CommandServer(overlay.Hwnd).Start();
 canvas.Sync();

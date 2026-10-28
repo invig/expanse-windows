@@ -1,5 +1,3 @@
-using Expanse.Native;
-
 namespace Expanse;
 
 public readonly record struct Vec(double X, double Y)
@@ -10,25 +8,43 @@ public readonly record struct Vec(double X, double Y)
     public double DistanceTo(Vec p) => Math.Sqrt((X - p.X) * (X - p.X) + (Y - p.Y) * (Y - p.Y));
 }
 
+public readonly record struct SizeD(double W, double H);
+
+/// A rectangle with CoreGraphics' CGRect semantics where the Mac app's maths depends on them:
+/// edges that only touch don't intersect, and a rect inset past zero size is null and
+/// intersects nothing.
 public readonly record struct RectD(double X, double Y, double W, double H)
 {
     public double Right => X + W;
     public double Bottom => Y + H;
+    public double MidX => X + W / 2;
+    public double MidY => Y + H / 2;
     public Vec Origin => new(X, Y);
-    public Vec Center => new(X + W / 2, Y + H / 2);
+    public Vec Center => new(MidX, MidY);
+    public SizeD Size => new(W, H);
+    public bool IsNull => W < 0 || H < 0;
+
+    /// Half-open, for hit-testing a point.
     public bool Contains(Vec p) => p.X >= X && p.X < Right && p.Y >= Y && p.Y < Bottom;
-    public bool Intersects(RectD r) => r.X < Right && r.Right > X && r.Y < Bottom && r.Bottom > Y;
+
+    /// `r` lies wholly inside (edges included).
+    public bool Contains(RectD r) => !IsNull && !r.IsNull && r.X >= X && r.Y >= Y && r.Right <= Right && r.Bottom <= Bottom;
+
+    public bool Intersects(RectD r) => !IsNull && !r.IsNull && r.X < Right && r.Right > X && r.Y < Bottom && r.Bottom > Y;
+
+    /// Negative values grow it; past zero size it's null.
     public RectD Inset(double dx, double dy) => new(X + dx, Y + dy, W - dx * 2, H - dy * 2);
+
     public RectD Offset(Vec d) => new(X + d.X, Y + d.Y, W, H);
 
     public RectD Union(RectD r)
     {
+        if (r.IsNull) return this;
+        if (IsNull) return r;
         double x = Math.Min(X, r.X), y = Math.Min(Y, r.Y);
         return new(x, y, Math.Max(Right, r.Right) - x, Math.Max(Bottom, r.Bottom) - y);
     }
 
-    public RECT Round() => new((int)Math.Round(X), (int)Math.Round(Y), (int)Math.Round(Right), (int)Math.Round(Bottom));
-    public static RectD From(RECT r) => new(r.Left, r.Top, r.Width, r.Height);
     public override string ToString() => $"{X:0},{Y:0} {W:0}x{H:0}";
 }
 

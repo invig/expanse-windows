@@ -73,6 +73,9 @@ other windows were moved out of the way so the subject was never covered.
 - **GDI drawing is clipped to the screen.** Off-screen pixels are never painted, so a window
   created off-screen has an empty picture. A 2 px strip refreshes only those 2 px. That rules out
   the strip trick.
+- **WinUI apps redraw late.** The new Notepad, once parked, takes a second or two to redraw after
+  being lifted under the overlay, so its picture is blank for that long. This is the same with both
+  picture backends. A snapshot kept from before it was parked would cover the gap.
 - **Windows never pulled a parked window back.** This was without display changes; those aren't
   tested yet.
 - **The fix is in the milestone.** On zoom-out (and for glides), every off-screen window is moved
@@ -129,6 +132,6 @@ backend, with 10 windows, in the same session:
 
 1. ~~Live window tracking (`SetWinEventHook`)~~: done, along with the glide when the taskbar or
    Alt-Tab focuses a parked window, and the tray icon.
-2. Hops on Ctrl+Alt+arrows; port the layout maths (nearest window, snapping, Tidy) with its
-   tests; the saved layout.
+2. ~~Hops on Ctrl+Alt+arrows; the layout maths ported with its tests~~: done. Next on the maths:
+   use it: drag with snapping, Tidy Up, new windows in free space. Then the saved layout.
 3. Dialogs should move with their owner. Then maximised windows, admin windows, several monitors and mixed DPI.
