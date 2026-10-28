@@ -36,7 +36,15 @@ sealed class Canvas
     (nint hwnd, long at) lastOwnFocus;
     CanvasWindow? hovered;
     CanvasWindow? glideTarget; // where the glide or dive in flight is heading
-    Drag? drag;                // a picture being dragged while zoomed out
+    Drag? drag;                // a press on the zoomed-out canvas, until the button comes up
+    /// Windows picked zoomed out (Shift-click, a marquee, Ctrl+A): they drag and close together.
+    readonly HashSet<CanvasWindow> selected = new();
+    RectD? marquee;            // the box being dragged out, view space
+    bool spaceHeld;            // Space down, zoomed out: dragging pans
+    /// The origin of the 100% camera you zoomed out from: zoomed out, the real windows are still
+    /// where it put them.
+    Vec liveOrigin;
+    readonly List<CanvasWindow> closing = new(); // asked to close a moment ago
     List<Layout.GuideLine> guides = new(); // snapping guides, canvas space
     bool guidesOverPictures;   // drawn by the pictures (shared visuals), not under them
     bool pendingTidy;          // Tidy Up from 100%: once zoomed out
@@ -66,11 +74,19 @@ sealed class Canvas
     /// their new size is the size you chose.
     readonly HashSet<nint> userSized = new();
 
-    sealed class Drag(CanvasWindow window, Vec startPoint)
+    enum DragKind { Windows, Marquee, Pan }
+
+    /// A press on the zoomed-out canvas: on a window (it moves, with the rest of the selection if
+    /// it's in one), on empty canvas (a marquee), or with Space held (the canvas pans).
+    sealed class Drag(DragKind what, Vec startPoint)
     {
-        public readonly CanvasWindow Window = window;
-        public readonly RectD StartFrame = window.Frame;
+        public readonly DragKind What = what;
         public readonly Vec StartPoint = startPoint;
+        public Vec Last = startPoint;
+        public CanvasWindow? Clicked;
+        public List<(CanvasWindow w, RectD start)> Moving = new();
+        /// A marquee keeps what was selected before it (with Shift).
+        public HashSet<CanvasWindow> Base = new();
         public bool Moved;
     }
     nint previousForeground;
@@ -488,7 +504,7 @@ sealed class Canvas
     /// are still where the camera you zoomed out from put them.
     RectD ScreenToCanvas(RECT f)
     {
-        var origin = active && returnCamera is Camera r ? r.Origin : camera.Origin;
+        var origin = active ? liveOrigin : camera.Origin;
         return new(f.Left - monitor.Left + origin.X, f.Top - monitor.Top + origin.Y, f.Width, f.Height);
     }
 
@@ -586,6 +602,7 @@ sealed class Canvas
         {
             pictures.Remove(w);
             if (hovered == w) hovered = null;
+            selected.Remove(w);
         }
         foreach (var w in added) pictures.Add(w);
         Relayout();
@@ -730,24 +747,84 @@ sealed class Canvas
         Log.Info($"restored a layout: {restored} of {windows.Count} windows");
     }
 
-    // MARK: Dragging
+    // MARK: The zoomed-out mouse
 
-    /// A picture dragged zoomed out moves its window's spot, snapping to the other windows'
-    /// edges, centres and the standard gap (Layout.Snap) unless Ctrl is held (⌘ on the Mac).
-    /// A press that doesn't move 3 px is a click: dive into the window.
+    /// As on the Mac: with Space held, dragging pans. On a window, its × closes it (or the
+    /// selection it's in), Shift toggles it in the selection, and otherwise it drags (with the
+    /// selection, if it's in one). On empty canvas a marquee selects what it touches, adding to
+    /// the selection with Shift.
+    void Press(Vec p, bool shift)
+    {
+        if (spaceHeld) drag = new Drag(DragKind.Pan, p);
+        else if (WindowAt(p) is CanvasWindow w)
+        {
+            double k = UiScale;
+            if (CloseShown(w, w, k) && Marks.CloseRect(camera.ToView(w.Frame), k).Contains(p))
+            {
+                Close(w);
+                return;
+            }
+            if (shift)
+            {
+                if (!selected.Remove(w)) selected.Add(w);
+                Redraw();
+                return;
+            }
+            List<CanvasWindow> group = InGroup(w) ? windows.Where(selected.Contains).ToList() : [w];
+            if (group.Count == 1) selected.Clear();
+            foreach (var g in group) BringToFront(g);
+            drag = new Drag(DragKind.Windows, p) { Clicked = w, Moving = group.Select(g => (g, g.Frame)).ToList() };
+        }
+        else
+        {
+            drag = new Drag(DragKind.Marquee, p) { Base = shift ? selected.ToHashSet() : new() };
+            if (!shift) selected.Clear();
+        }
+        SetCapture(overlay.Hwnd);
+        Redraw();
+    }
+
+    /// Dragged pictures move their windows' spots: one window, or the selection's bounding box as
+    /// one block, snapping to the other windows' edges, centres and the standard gap (Layout.Snap)
+    /// unless Ctrl is held (⌘ on the Mac). A press that doesn't move 3 px is a click: dive in.
     void DragTo(Vec p, bool snap)
     {
         var d = drag!;
+        switch (d.What)
+        {
+            case DragKind.Pan:
+                d.Moved = true;
+                PanBy(p - d.Last);
+                d.Last = p;
+                return;
+            case DragKind.Marquee:
+            {
+                d.Moved = true;
+                var box = new RectD(Math.Min(d.StartPoint.X, p.X), Math.Min(d.StartPoint.Y, p.Y),
+                    Math.Abs(p.X - d.StartPoint.X), Math.Abs(p.Y - d.StartPoint.Y));
+                marquee = box;
+                selected.Clear();
+                selected.UnionWith(d.Base);
+                selected.UnionWith(windows.Where(w => camera.ToView(w.Frame).Intersects(box)));
+                Redraw();
+                return;
+            }
+        }
         if (!d.Moved && p.DistanceTo(d.StartPoint) < 3) return;
         d.Moved = true;
-        var proposed = d.StartFrame.Offset(new Vec((p.X - d.StartPoint.X) / camera.Scale, (p.Y - d.StartPoint.Y) / camera.Scale));
-        var (frame, lines) = snap
-            ? Layout.Snap(proposed, windows.Where(w => w != d.Window).Select(w => w.Frame).ToList(), camera.Scale, camera.Center(ViewSize))
+        var bounds = d.Moving.Skip(1).Aggregate(d.Moving[0].start, (b, m) => b.Union(m.start));
+        var proposed = bounds.Offset(new Vec((p.X - d.StartPoint.X) / camera.Scale, (p.Y - d.StartPoint.Y) / camera.Scale));
+        var moving = d.Moving.Select(m => m.w).ToHashSet();
+        var (snapped, lines) = snap
+            ? Layout.Snap(proposed, windows.Where(w => !moving.Contains(w)).Select(w => w.Frame).ToList(), camera.Scale, camera.Center(ViewSize))
             : (proposed, new List<Layout.GuideLine>());
-        d.Window.Frame = frame;
-        pictures.Moved(d.Window, camera, View);
+        foreach (var (w, start) in d.Moving)
+        {
+            w.Frame = new RectD(snapped.X + (start.X - bounds.X), snapped.Y + (start.Y - bounds.Y), start.W, start.H);
+            pictures.Moved(w, camera, View);
+        }
         ShowGuides(lines);
-        hovered = d.Window;
+        hovered = d.Clicked;
         Relayout();
     }
 
@@ -757,14 +834,132 @@ sealed class Canvas
         drag = null;
         ReleaseCapture();
         ShowGuides(new());
-        if (d.Moved)
+        marquee = null;
+        switch (d.What)
         {
-            Log.Info($"dragged {d.Window} to {d.Window.Frame}");
-            NoteUserMove(d.Window, d.StartFrame.Origin);
-            ScheduleSave();
+            case DragKind.Windows when d.Moved:
+                Log.Info(d.Moving.Count == 1 ? $"dragged {d.Clicked} to {d.Clicked!.Frame}"
+                    : $"dragged {d.Moving.Count} windows by {d.Clicked!.Frame.X - d.Moving.First(m => m.w == d.Clicked).start.X:0},{d.Clicked.Frame.Y - d.Moving.First(m => m.w == d.Clicked).start.Y:0}");
+                foreach (var (w, start) in d.Moving) NoteUserMove(w, start.Origin);
+                ScheduleSave();
+                break;
+            case DragKind.Windows when click:
+                Log.Info($"click on {d.Clicked}");
+                selected.Clear();
+                Exit(d.Clicked);
+                break;
+            case DragKind.Marquee when d.Moved:
+                Log.Info($"marquee: {selected.Count} selected");
+                break;
         }
-        else if (click) { Log.Info($"click on {d.Window}"); Exit(d.Window); }
         Redraw();
+    }
+
+    /// Part of a selection of more than one window (which × and Ctrl+W close together).
+    bool InGroup(CanvasWindow? w) => w != null && selected.Count > 1 && selected.Contains(w);
+
+    // MARK: Camera, by hand
+
+    /// Wheel, pinch, Space-drag and the zoom keys. You moved the camera yourself, so Esc now goes
+    /// back to 100% where you're looking, not where you were (the Mac's cameraMovedByUser).
+    void PanBy(Vec d)
+    {
+        CancelAnimation();
+        camera.Pan(d);
+        returnCamera = null;
+        if (drag == null) HoverAtCursor();
+        Relayout();
+    }
+
+    void ZoomBy(double factor, Vec anchor)
+    {
+        CancelAnimation();
+        camera.Zoom(camera.Scale * factor, anchor);
+        returnCamera = null;
+        HoverAtCursor();
+        Relayout();
+    }
+
+    /// 1, - and =: to `scale` about the middle of the screen, animated. (0 fits every window.)
+    void ZoomKey(double scale)
+    {
+        CancelAnimation();
+        var target = camera;
+        target.Zoom(scale, new Vec(ViewSize.X / 2, ViewSize.Y / 2));
+        returnCamera = null;
+        Animate(target, 0.22);
+    }
+
+    /// You took over the camera mid-animation: it stops where it is, and windows moving on the
+    /// canvas (Tidy Up) land.
+    void CancelAnimation()
+    {
+        if (animation is not Animation a) return;
+        animation = null;
+        if (a.Moves != null)
+            foreach (var (w, _, to) in a.Moves)
+            {
+                w.Frame = to;
+                pictures.Moved(w, camera, View);
+            }
+        a.Completion?.Invoke();
+    }
+
+    /// The pointer may be over a different window with no move to tell us (the canvas moved).
+    void HoverAtCursor()
+    {
+        GetCursorPos(out var p);
+        hovered = WindowAt(new Vec(p.X - monitor.Left, p.Y - monitor.Top));
+    }
+
+    double UiScale => GetDpiForWindow(overlay.Hwnd) / 96.0;
+
+    // MARK: Closing
+
+    const int CloseMinWidth = 220; // no × on pictures narrower than this (as on the Mac)
+    const nint CloseTimer = 7;
+
+    /// Whether `w` shows its × with the pointer over `pointer`: the window under the pointer
+    /// shows one, and with it every window of the selection it's in. Not on small pictures, nor
+    /// where a window in front covers the corner.
+    bool CloseShown(CanvasWindow w, CanvasWindow? pointer, double k)
+    {
+        if (w != pointer && !(InGroup(pointer) && selected.Contains(w))) return false;
+        var r = camera.ToView(w.Frame);
+        if (r.W < CloseMinWidth * k) return false;
+        var c = Marks.CloseRect(r, k);
+        return !windows.Skip(windows.IndexOf(w) + 1).Any(f => camera.ToView(f.Frame).Intersects(c));
+    }
+
+    /// Closes `w`, or the whole selection if it's part of one: each is sent WM_CLOSE, as its own
+    /// close button would. Their pictures go when the windows do (the sync after).
+    void Close(CanvasWindow w)
+    {
+        List<CanvasWindow> ws = InGroup(w) ? windows.Where(selected.Contains).ToList() : [w];
+        if (ws.Count > 1) selected.Clear();
+        Log.Info(ws.Count == 1 ? $"close {w}" : $"close {ws.Count} windows");
+        foreach (var x in ws) PostMessage(x.Hwnd, WM_CLOSE, 0, 0);
+        closing.Clear();
+        closing.AddRange(ws);
+        SetTimer(overlay.Hwnd, CloseTimer, 500, 0);
+        Redraw();
+    }
+
+    /// Ctrl+W: the selection if there is one, otherwise the window under the pointer.
+    void CloseKey()
+    {
+        if ((windows.FirstOrDefault(selected.Contains) ?? hovered) is CanvasWindow w) Close(w);
+    }
+
+    /// Half a second after closing: a window still there with its input disabled has a dialog up
+    /// ("Save changes?"), which the overlay would cover. Dive into it so it can be answered.
+    void CloseSettled()
+    {
+        var asking = closing.FirstOrDefault(w => windows.Contains(w) && IsWindow(w.Hwnd) && IsWindowVisible(w.Hwnd) && !IsWindowEnabled(w.Hwnd));
+        closing.Clear();
+        if (asking == null || !active || gliding) return;
+        Log.Info($"close: {asking} is asking something first: dive in");
+        Exit(asking);
     }
 
     void ShowGuides(List<Layout.GuideLine> lines)
@@ -851,6 +1046,7 @@ sealed class Canvas
         gliding = !zoomOut;
         hovered = null;
         camera.Scale = 1;
+        liveOrigin = camera.Origin;
         if (!pictures.Attach(windows) && pictures is SharedVisualPictures)
         {
             Log.Info("pictures: shared visuals failed for every window; falling back to DWM thumbnails");
@@ -870,8 +1066,7 @@ sealed class Canvas
             // The pointer may already be over a window, with no move to tell us.
             Animate(OverviewCamera(), 0.22, () =>
             {
-                GetCursorPos(out var p);
-                hovered = WindowAt(new Vec(p.X - monitor.Left, p.Y - monitor.Top));
+                HoverAtCursor();
                 if (pendingTidy) { pendingTidy = false; Tidy(); }
                 if (pendingRestore is SavedLayout restore) { pendingRestore = null; RestoreLayout(restore); }
             });
@@ -943,7 +1138,10 @@ sealed class Canvas
             ?? windows.LastOrDefault(w => camera.ToView(w.Frame).Intersects(View));
         if (target != null && IsWindow(target.Hwnd))
         {
-            lastFocus = $"{target}: {Focus(target.Hwnd)}";
+            // A window asking something (a dialog it opened when asked to close) can't take focus
+            // itself: the dialog does.
+            nint to = IsWindowEnabled(target.Hwnd) ? target.Hwnd : GetLastActivePopup(target.Hwnd);
+            lastFocus = $"{target}: {Focus(to)}";
             lastOwnFocus = (target.Hwnd, Stopwatch.GetTimestamp());
             lastFocusedWindow = target.Hwnd;
             Log.Info($"focus {lastFocus}");
@@ -954,6 +1152,8 @@ sealed class Canvas
         gliding = false;
         glideTarget = null;
         returnCamera = null;
+        selected.Clear();
+        spaceHeld = false;
         Log.Info($"handed back: moved {moved} windows, waited {waited} frames, {Ms(t0):0}ms");
         if (pendingSync) { pendingSync = false; SyncLive(); }
         ScheduleSave();
@@ -1170,6 +1370,10 @@ sealed class Canvas
                 KillTimer(overlay.Hwnd, SaveTimer);
                 Save();
                 return 0;
+            case WM_TIMER when wParam == CloseTimer:
+                KillTimer(overlay.Hwnd, CloseTimer);
+                CloseSettled();
+                return 0;
             case WM_TIMER when wParam == FocusTimer:
                 KillTimer(overlay.Hwnd, FocusTimer);
                 FocusSettled(settlingFocus);
@@ -1204,12 +1408,7 @@ sealed class Canvas
             case WM_LBUTTONDOWN:
             {
                 var p = new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF));
-                if (active && !gliding && animation == null && WindowAt(p) is CanvasWindow w)
-                {
-                    BringToFront(w);
-                    drag = new Drag(w, p);
-                    SetCapture(overlay.Hwnd);
-                }
+                if (active && !gliding && animation == null) Press(p, shift: ((int)wParam & MK_SHIFT) != 0);
                 return 0;
             }
             case WM_LBUTTONUP:
@@ -1219,28 +1418,59 @@ sealed class Canvas
                 EndDrag(click: false);
                 return 0;
             case WM_MOUSEWHEEL:
+            case WM_MOUSEHWHEEL:
             {
-                if (!active || gliding) return 0;
+                // As on the Mac: the wheel (and a touchpad's two-finger scroll) pans; with Ctrl (and
+                // a touchpad pinch, which arrives as Ctrl+wheel) it zooms around the pointer. Shift
+                // turns a plain wheel sideways.
+                if (!active || gliding || drag != null) return 0;
                 var screen = new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF));
-                int delta = (short)((wParam >> 16) & 0xFFFF);
-                animation = null;
-                camera.Zoom(camera.Scale * Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top));
-                Relayout();
+                int delta = (short)((wParam >> 16) & 0xFFFF), keys = (int)(wParam & 0xFFFF);
+                double step = 0.5 * UiScale; // 60 px a notch at 100%
+                if (msg == WM_MOUSEHWHEEL) PanBy(new Vec(-delta * step, 0));
+                else if ((keys & MK_CONTROL) != 0) ZoomBy(Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top));
+                else if ((keys & MK_SHIFT) != 0) PanBy(new Vec(delta * step, 0));
+                else PanBy(new Vec(0, delta * step));
                 return 0;
             }
+            case WM_SETCURSOR when active && (spaceHeld || drag?.What == DragKind.Pan):
+                SetCursor(LoadCursor(0, IDC_SIZEALL));
+                return 1;
+            case WM_KEYUP when (int)wParam == VK_SPACE:
+                spaceHeld = false;
+                if (drag?.What != DragKind.Pan) SetCursor(LoadCursor(0, IDC_ARROW));
+                return 0;
             case WM_KEYDOWN:
+            {
                 if (!active || gliding) return 0;
+                bool ctrl = GetKeyState(VK_CONTROL) < 0;
                 switch ((int)wParam)
                 {
+                    case VK_ESCAPE when selected.Count > 0: selected.Clear(); Redraw(); break;
                     case VK_ESCAPE: Exit(null); break;
                     case VK_RETURN when windows.Count > 0: Exit(hovered ?? windows[^1]); break;
-                    case VK_T: Tidy(); break;
+                    case VK_SPACE when !spaceHeld:
+                        spaceHeld = true;
+                        SetCursor(LoadCursor(0, IDC_SIZEALL));
+                        break;
+                    case VK_A when ctrl: selected.UnionWith(windows); Redraw(); break;
+                    case VK_W when ctrl: CloseKey(); break;
+                    case VK_T when !ctrl: Tidy(); break;
+                    case VK_0 or VK_NUMPAD0 when !ctrl:
+                        CancelAnimation();
+                        returnCamera = null;
+                        Animate(FitCamera(1), 0.22);
+                        break;
+                    case VK_1 or VK_NUMPAD1 when !ctrl: ZoomKey(1); break;
+                    case VK_OEM_MINUS or VK_SUBTRACT: ZoomKey(camera.Scale / 1.5); break;
+                    case VK_OEM_PLUS or VK_ADD: ZoomKey(camera.Scale * 1.5); break;
                     case VK_LEFT: Navigate(Direction.Left); break;
                     case VK_RIGHT: Navigate(Direction.Right); break;
                     case VK_UP: Navigate(Direction.Up); break;
                     case VK_DOWN: Navigate(Direction.Down); break;
                 }
                 return 0;
+            }
             case WM_SYSCOMMAND when (wParam & 0xFFF0) == SC_KEYMENU:
                 return 0; // Alt (ours, from the focus fallback, or the user's) mustn't enter menu mode
 
@@ -1288,10 +1518,22 @@ sealed class Canvas
             return;
         }
         bool show = active && !gliding;
-        double k = GetDpiForWindow(overlay.Hwnd) / 96.0;
+        double k = UiScale;
         pictures.SetLabels(show ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
-        pictures.SetRing(show && hovered != null ? camera.ToView(hovered.Frame) : null, k);
+        pictures.SetMarks(show ? CurrentMarks(k) : Marks.None, k);
         pictures.Present();
+    }
+
+    /// Rings round the hovered and selected windows, the box round a selection of more than one,
+    /// the marquee, and the × buttons showing.
+    Marks CurrentMarks(double k)
+    {
+        var rings = windows.Where(w => w == hovered || selected.Contains(w))
+            .Select(w => (camera.ToView(w.Frame), selected.Contains(w))).ToList();
+        var picked = windows.Where(selected.Contains).Select(w => camera.ToView(w.Frame)).ToList();
+        RectD? box = picked.Count > 1 ? picked.Skip(1).Aggregate(picked[0], (a, b) => a.Union(b)) : null;
+        var closes = drag == null ? windows.Where(w => CloseShown(w, hovered, k)).Select(w => camera.ToView(w.Frame)).ToList() : [];
+        return new Marks(rings, box, marquee, closes);
     }
 
     /// Windows that get a title, bottom-most first: not tiny, in view, and not with their top
@@ -1343,18 +1585,28 @@ sealed class Canvas
             var text = new RECT(lx + pad, ly, lx + lw - pad, ly + h);
             DrawText(hdc, label, -1, ref text, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
         }
-        if (hovered != null)
+        // Rings, the selection box and the marquee's outline (no × buttons: they'd sit on the
+        // pictures, which cover the backdrop; Ctrl+W still closes).
+        var marks = CurrentMarks(k);
+        nint blue = Gdi32.CreateSolidBrush(Gdi32.RGB(76, 154, 255));
+        void Outline(RectD o, int t)
         {
-            var r = camera.ToView(hovered.Frame);
-            int t = Math.Max(2, (int)(3 * k)), gap = Math.Max(1, (int)(2 * k));
-            nint pen = Gdi32.CreatePen(0, t, Gdi32.RGB(76, 154, 255));
-            Gdi32.SelectObject(hdc, pen);
-            Gdi32.SelectObject(hdc, Gdi32.GetStockObject(Gdi32.NULL_BRUSH));
-            int o = gap + t / 2;
-            Gdi32.Rectangle(hdc, (int)r.X - o, (int)r.Y - o, (int)(r.Right + o + 1), (int)(r.Bottom + o + 1));
-            Gdi32.SelectObject(hdc, Gdi32.GetStockObject(Gdi32.NULL_PEN));
-            Gdi32.DeleteObject(pen);
+            int x0 = (int)Math.Round(o.X), y0 = (int)Math.Round(o.Y), x1 = (int)Math.Round(o.Right), y1 = (int)Math.Round(o.Bottom);
+            foreach (var s in new[] { new RECT(x0, y0, x1, y0 + t), new RECT(x0, y1 - t, x1, y1), new RECT(x0, y0, x0 + t, y1), new RECT(x1 - t, y0, x1, y1) })
+            {
+                var strip = s;
+                FillRect(hdc, ref strip, blue);
+            }
         }
+        int gap = Math.Max(1, (int)Math.Round(2 * k)), thin = Math.Max(1, (int)Math.Round(k));
+        foreach (var (r, isSelected) in marks.Rings)
+        {
+            int t = Math.Max(2, (int)Math.Round((isSelected ? 4 : 3) * k));
+            Outline(r.Inset(-(gap + t), -(gap + t)), t);
+        }
+        if (marks.SelectionBox is RectD box) Outline(box.Inset(-8 * k, -8 * k), thin);
+        if (marks.Marquee is RectD m) Outline(m, thin);
+        Gdi32.DeleteObject(blue);
         if (!guidesOverPictures && guides.Count > 0)
         {
             // DWM thumbnails draw over us: guides go underneath, visible between the pictures.
@@ -1503,6 +1755,10 @@ sealed class Canvas
             workArea = work.ToString(),
             foreground = new { hwnd = $"0x{fg:X}", title = Title(fg) },
             hovered = hovered?.ToString(),
+            selected = windows.Where(selected.Contains).Select(w => w.ToString()),
+            marquee = marquee?.ToString(),
+            spaceHeld,
+            returnCamera = returnCamera?.ToString(),
             lastAnimation,
             lastFocus,
             lastOverlayFocus,

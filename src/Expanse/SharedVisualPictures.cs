@@ -56,8 +56,11 @@ sealed class SharedVisualPictures : IPictures
     readonly ID3D11Device d3d;
     readonly IDCompositionDesktopDevice device;
     readonly IDCompositionTarget target;
-    readonly IDCompositionVisual2 root, canvas, titles;
-    readonly Strips ring, guides;
+    readonly IDCompositionVisual2 root, canvas, titles, closes;
+    readonly Strips accent, marqueeFill, guides;
+    readonly List<IDCompositionVisual2> closeVisuals = new();
+    IDCompositionSurface? closeSurface;
+    double closeScale;
     readonly ID2D1Factory1 d2dFactory;
     readonly ID2D1Device d2dDevice;
     readonly ID2D1DeviceContext d2d;
@@ -97,9 +100,12 @@ sealed class SharedVisualPictures : IPictures
         device.CreateVisual(out canvas);
         canvas.SetBitmapInterpolationMode(BitmapInterpolationMode.Linear);
         root.AddVisual(canvas, false, null);
-        ring = new Strips(this, 76 / 255f, 154 / 255f, 1f);
+        accent = new Strips(this, 76 / 255f, 154 / 255f, 1f);
+        marqueeFill = new Strips(this, 76 / 255f, 154 / 255f, 1f, 0.12f);
         device.CreateVisual(out titles);
         root.AddVisual(titles, false, null);
+        device.CreateVisual(out closes);
+        root.AddVisual(closes, false, null);
         guides = new Strips(this, 1f, 0.22f, 0.37f);
         device.Commit();
         Log.Info($"pictures: shared visuals (D3D11 {driver})");
@@ -198,7 +204,9 @@ sealed class SharedVisualPictures : IPictures
     {
         canvas.RemoveAllVisuals();
         titles.RemoveAllVisuals();
-        ring.Set([]);
+        closes.RemoveAllVisuals();
+        accent.Set([]);
+        marqueeFill.Set([]);
         guides.Set([]);
         device.Commit();
         foreach (var p in pictures.Values)
@@ -249,16 +257,79 @@ sealed class SharedVisualPictures : IPictures
         return true;
     }
 
-    /// A 3 px (at 100%) blue ring, 2 px outside the picture, as four strips.
-    public void SetRing(RectD? picture, double scale)
+    /// Rings 2 px outside their pictures (3 px at 100% hovered, 4 selected), a 1 px box 8 px
+    /// around a selection, the marquee (filled at 12%, outlined), close buttons. All in the accent
+    /// blue, as strips.
+    public void SetMarks(Marks marks, double scale)
     {
-        if (picture is not RectD r) { ring.Set([]); return; }
-        double t = Math.Max(2, Math.Round(3 * scale)), gap = Math.Max(1, Math.Round(2 * scale));
-        var o = r.Inset(-(gap + t), -(gap + t));
-        ring.Set([
-            new RectD(o.X, o.Y, o.W, t), new RectD(o.X, o.Bottom - t, o.W, t),
-            new RectD(o.X, o.Y + t, t, o.H - 2 * t), new RectD(o.Right - t, o.Y + t, t, o.H - 2 * t),
-        ]);
+        var rects = new List<RectD>();
+        double gap = Math.Max(1, Math.Round(2 * scale)), thin = Math.Max(1, Math.Round(scale));
+        foreach (var (r, selected) in marks.Rings)
+        {
+            double t = Math.Max(2, Math.Round((selected ? 4 : 3) * scale));
+            Outline(rects, r.Inset(-(gap + t), -(gap + t)), t);
+        }
+        if (marks.SelectionBox is RectD box) Outline(rects, box.Inset(-8 * scale, -8 * scale), thin);
+        if (marks.Marquee is RectD m) Outline(rects, m, thin);
+        accent.Set(rects);
+        marqueeFill.Set(marks.Marquee is RectD fill ? [fill] : []);
+
+        if (marks.Closes.Count > 0 && (closeSurface == null || closeScale != scale)) DrawClose(scale);
+        closes.RemoveAllVisuals();
+        for (int i = 0; i < marks.Closes.Count; i++)
+        {
+            if (i == closeVisuals.Count)
+            {
+                device.CreateVisual(out var v);
+                closeVisuals.Add(v);
+            }
+            var c = Marks.CloseRect(marks.Closes[i], scale);
+            closeVisuals[i].SetContent(closeSurface);
+            closeVisuals[i].SetOffsetX((float)Math.Round(c.X));
+            closeVisuals[i].SetOffsetY((float)Math.Round(c.Y));
+            closes.AddVisual(closeVisuals[i], false, null);
+        }
+    }
+
+    /// Four strips `t` thick along the inside of `o`.
+    static void Outline(List<RectD> rects, RectD o, double t)
+    {
+        rects.Add(new RectD(o.X, o.Y, o.W, t));
+        rects.Add(new RectD(o.X, o.Bottom - t, o.W, t));
+        rects.Add(new RectD(o.X, o.Y + t, t, o.H - 2 * t));
+        rects.Add(new RectD(o.Right - t, o.Y + t, t, o.H - 2 * t));
+    }
+
+    /// The close button: a dark, three-quarters opaque circle with a white ×, as on the Mac.
+    void DrawClose(double scale)
+    {
+        float size = (float)Math.Round(26 * scale), a = (float)(9 * scale), b = size - a;
+        device.CreateSurface((uint)size, (uint)size, Format.B8G8R8A8_UNorm, AlphaMode.Premultiplied, out var surface);
+        using (var dxgi = surface.BeginDraw<IDXGISurface>(null, out Vortice.Mathematics.Int2 offset))
+        using (var bitmap = d2d.CreateBitmapFromDxgiSurface(dxgi, new BitmapProperties1(
+                   new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied), 96, 96,
+                   BitmapOptions.Target | BitmapOptions.CannotDraw)))
+        using (var dark = d2d.CreateSolidColorBrush(new Color4(0.1f, 0.1f, 0.1f, 0.75f)))
+        using (var white = d2d.CreateSolidColorBrush(new Color4(1f, 1f, 1f, 1f)))
+        using (var round = d2dFactory.CreateStrokeStyle(new StrokeStyleProperties { StartCap = CapStyle.Round, EndCap = CapStyle.Round }))
+        {
+            d2d.Target = bitmap;
+            d2d.BeginDraw();
+            d2d.Transform = Matrix3x2.CreateTranslation(offset.X, offset.Y);
+            d2d.PushAxisAlignedClip(new Vortice.RawRectF(0, 0, size, size), AntialiasMode.Aliased);
+            d2d.Clear(new Color4(0, 0, 0, 0));
+            d2d.FillEllipse(new Ellipse(new Vector2(size / 2, size / 2), size / 2, size / 2), dark);
+            float w = (float)(2 * scale);
+            d2d.DrawLine(new Vector2(a, a), new Vector2(b, b), white, w, round);
+            d2d.DrawLine(new Vector2(a, b), new Vector2(b, a), white, w, round);
+            d2d.PopAxisAlignedClip();
+            d2d.EndDraw();
+            d2d.Target = null;
+        }
+        surface.EndDraw();
+        closeSurface?.Dispose();
+        closeSurface = surface;
+        closeScale = scale;
     }
 
     /// Each title a dark pill, centred above its picture and no wider than it (cut off at the
@@ -343,7 +414,7 @@ sealed class SharedVisualPictures : IPictures
         readonly IDCompositionSurface colour;
         readonly List<IDCompositionVisual2> pool = new();
 
-        public Strips(SharedVisualPictures owner, float r, float g, float b)
+        public Strips(SharedVisualPictures owner, float r, float g, float b, float a = 1f)
         {
             this.owner = owner;
             owner.device.CreateVisual(out container);
@@ -353,7 +424,7 @@ sealed class SharedVisualPictures : IPictures
             using (var tex = colour.BeginDraw<ID3D11Texture2D>(null, out Vortice.Mathematics.Int2 offset))
             using (var rtv = owner.d3d.CreateRenderTargetView(tex, null))
             using (var context1 = owner.d3d.ImmediateContext.QueryInterface<ID3D11DeviceContext1>())
-                context1.ClearView(rtv, new Color4(r, g, b, 1f), new[] { new Vortice.RawRect(offset.X, offset.Y, offset.X + 1, offset.Y + 1) });
+                context1.ClearView(rtv, new Color4(r * a, g * a, b * a, a), new[] { new Vortice.RawRect(offset.X, offset.Y, offset.X + 1, offset.Y + 1) });
             colour.EndDraw();
         }
 
@@ -389,8 +460,12 @@ sealed class SharedVisualPictures : IPictures
         Detach();
         foreach (var t in titleVisuals.Values) Dispose(t);
         titleVisuals.Clear();
-        ring.Dispose();
+        accent.Dispose();
+        marqueeFill.Dispose();
         guides.Dispose();
+        foreach (var v in closeVisuals) v.Dispose();
+        closeSurface?.Dispose();
+        closes.Dispose();
         foreach (var f in fonts.Values) f.Dispose();
         titles.Dispose();
         canvas.Dispose();

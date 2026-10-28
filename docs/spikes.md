@@ -134,7 +134,13 @@ backend, with 10 windows, in the same session:
    Alt-Tab focuses a parked window, and the tray icon.
 2. ~~Hops on Ctrl+Alt+arrows; the layout maths ported with its tests~~ and ~~drag with snapping,
    Tidy Up, new windows in free space~~: done. Still to come:
-   - **Selecting several windows** (box-select, Shift-click) to drag them as a group.
+   - ~~The rest of the zoomed-out controls: box-select, Shift-click and group drag, the close
+     button, zoom keys, wheel and Space-drag pan~~: done.
+   - **Rings and close buttons are drawn over every picture**, not in each one's stacking order:
+     a ring round a window that's behind another crosses the one in front. (A × is only shown
+     where nothing in front covers it.)
+   - **The VM's display resets to the UTM window's size** (800×600 lately) every so often, even
+     after `Guest res`; tests that click at fixed spots should set it right before.
    - ~~The saved layout, the home layout for smaller screens, Restore Layout~~: done.
    - **Taskbar previews and notifications** can sit above the overlay.
    - **Restoring a minimised window that was parked off-screen** brought it back once at 1/1.25

@@ -27,8 +27,19 @@ Early days. What works so far:
 - **New windows open in free space** next to the window you were in (right, below, left, then above),
   as on the Mac; the view glides there if that's off screen. A window coming back from being
   minimised goes back to its own spot.
-- <kbd>Esc</kbd> or the hotkey again goes back to where you were; the mouse wheel zooms around the
-  pointer.
+- **Getting around zoomed out**, as on the Mac: the mouse wheel (or a touchpad's two-finger
+  scroll) pans, sideways with <kbd>Shift</kbd> or a tilt wheel; <kbd>Ctrl</kbd>+wheel (or a pinch)
+  zooms around the pointer; or hold <kbd>Space</kbd> and drag. <kbd>0</kbd> fits every window,
+  <kbd>1</kbd> zooms to 100%, <kbd>-</kbd> and <kbd>=</kbd> zoom out and in. <kbd>Esc</kbd> or the
+  hotkey again goes back to where you were, or, once you've moved the view, to 100% where you're
+  looking.
+- **Select several windows** with <kbd>Shift</kbd>-click, by dragging a box over empty canvas
+  (<kbd>Shift</kbd> adds to the selection), or with <kbd>Ctrl</kbd> <kbd>A</kbd>; <kbd>Esc</kbd>
+  clears it. Dragging any of them moves them all, snapping as one block.
+- **Close windows from the canvas** with the × at the top right of the picture under the pointer
+  (on every selected window when it's one of them), or <kbd>Ctrl</kbd> <kbd>W</kbd> (the selection,
+  otherwise the window under the pointer). A window that asks first ("Save changes?") is brought up
+  so you can answer.
 - **Windows are tracked live.** New windows join the canvas where they open, closed ones leave it,
   and moving a window moves its spot. Zoomed out, pictures appear and disappear as windows come and
   go.
@@ -81,9 +92,10 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
   it's missing or fails, Expanse falls back to documented DWM thumbnails, one call per picture per
   frame. `Expanse.exe --pictures dwm` forces the fallback.
 - **Our UI is in the same tree, over the pictures:** titles (Direct2D/DirectWrite, drawn once per
-  text), the hover ring and snapping guides. Everything that moves with the camera changes in one
-  composition commit per frame. With the fallback, DWM draws its thumbnails over everything, so
-  titles and the ring go on the backdrop underneath.
+  text), the hover and selection rings, the marquee, close buttons and snapping guides. Everything
+  that moves with the camera changes in one composition commit per frame. With the fallback, DWM
+  draws its thumbnails over everything, so titles and rings go on the backdrop underneath, and
+  there are no close buttons (<kbd>Ctrl</kbd> <kbd>W</kbd> still works).
 - **Off-screen windows come on-screen underneath the overlay** while it's up. GDI-drawn apps
   (classic Win32, Explorer's file list) only paint the parts of a window that are on a screen, so
   parked ones would otherwise show stale or empty pictures.
@@ -101,7 +113,7 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
 |---|---|
 | `src/Expanse` | The app |
 | `src/Ctl` | `expansectl`: sends commands to the running app over a named pipe |
-| `src/Guest` | Test helper on the VM's desktop: screenshots, clicks, keys |
+| `src/Guest` | Test helper on the VM's desktop: screenshots, clicks, keys, the wheel |
 | `src/Spikes` | Week-one experiments (pictures, parking, focus) |
 | `src/Layout` | The canvas maths (nearest window, Tidy Up, free spots, snapping) and geometry, no Windows APIs |
 | `src/Layout.Tests` | Its tests: by hand, and against the Mac app's own Swift on random layouts |

@@ -38,7 +38,7 @@ interface IPictures : IDisposable
     /// over its pictures (the caller draws them underneath instead).
     bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness);
 
-    /// Whether titles and the hover ring are drawn over the pictures (SetLabels, SetRing);
+    /// Whether titles and marks are drawn over the pictures (SetLabels, SetMarks);
     /// otherwise the overlay draws them on its backdrop, under the pictures.
     bool DrawsDecorations { get; }
 
@@ -46,8 +46,9 @@ interface IPictures : IDisposable
     /// coordinates). `scale` is the DPI scale.
     void SetLabels(IReadOnlyList<Label> labels, double scale);
 
-    /// The ring around the hovered picture, or none.
-    void SetRing(RectD? picture, double scale);
+    /// Our marks over the pictures: rings (hovered, selected), the box around a selection, the
+    /// marquee being dragged, and close buttons.
+    void SetMarks(Marks marks, double scale);
 
     /// Puts everything changed since the last call on screen, in one go (one composition
     /// commit): pictures, titles, ring and guides move together.
@@ -59,6 +60,18 @@ interface IPictures : IDisposable
 }
 
 readonly record struct Label(nint Hwnd, string Text, RectD Picture);
+
+/// View coordinates. `Closes`: the pictures showing a close button (see Marks.CloseRect).
+readonly record struct Marks(IReadOnlyList<(RectD picture, bool selected)> Rings, RectD? SelectionBox, RectD? Marquee,
+    IReadOnlyList<RectD> Closes)
+{
+    public static readonly Marks None = new([], null, null, []);
+
+    /// The close button of a picture drawn at `r`: 26 px (at 100%), 10 px in from the top-right
+    /// corner, as on the Mac.
+    public static RectD CloseRect(RectD r, double scale) =>
+        new(r.Right - 36 * scale, r.Y + 10 * scale, 26 * scale, 26 * scale);
+}
 
 static class Pictures
 {
@@ -135,7 +148,7 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     public bool SetGuides(IReadOnlyList<(Vec a, Vec b)> lines, double thickness) => false;
     public bool DrawsDecorations => false;
     public void SetLabels(IReadOnlyList<Label> labels, double scale) { }
-    public void SetRing(RectD? picture, double scale) { }
+    public void SetMarks(Marks marks, double scale) { }
     public void Present() { }
 
     /// The next Moved sends it again, with the new source rect.

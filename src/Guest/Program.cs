@@ -97,7 +97,14 @@ try
                 break;
             }
             case "key": Key(args[++i]); break;
+            // Held across the steps that follow (Shift-click, Space-drag, Ctrl+wheel).
+            case "hold": Send(KeyInput(ScanCode(args[++i]), up: false)); Log($"hold {args[i]}"); break;
+            case "release": Send(KeyInput(ScanCode(args[++i]), up: true)); Log($"release {args[i]}"); break;
+            // A wheel turn of N (120 a notch; positive is away from you, or right for hwheel).
+            case "wheel": Wheel(MOUSEEVENTF_WHEEL, int.Parse(args[++i])); break;
+            case "hwheel": Wheel(0x1000, int.Parse(args[++i])); break; // MOUSEEVENTF_HWHEEL
             case "wait": Thread.Sleep(int.Parse(args[++i])); break;
+            case "cursor": Log($"cursor {CursorName()}"); break;
             default: throw new ArgumentException($"unknown step {args[i]}");
         }
     }
@@ -142,6 +149,15 @@ void Mouse(uint flags)
     Send(input);
 }
 
+void Wheel(uint flags, int delta)
+{
+    var input = new INPUT { type = INPUT_MOUSE };
+    input.u.mi.dwFlags = flags;
+    input.u.mi.mouseData = delta;
+    Send(input);
+    Log($"{(flags == MOUSEEVENTF_WHEEL ? "wheel" : "hwheel")} {delta}");
+}
+
 void Key(string combo)
 {
     var codes = combo.ToLowerInvariant().Split('+').Select(ScanCode).ToList();
@@ -164,7 +180,7 @@ static ushort ScanCode(string name) => name switch
     "ctrl" => 0x1D, "alt" => 0x38, "shift" => 0x2A, "win" => 0xE05B,
     "esc" => 0x01, "grave" or "`" => 0x29, "tab" => 0x0F, "enter" => 0x1C, "space" => 0x39,
     "left" => 0xE04B, "right" => 0xE04D, "up" => 0xE048, "down" => 0xE050,
-    "t" => 0x14, "w" => 0x11, "0" => 0x0B, "1" => 0x02,
+    "t" => 0x14, "w" => 0x11, "a" => 0x1E, "0" => 0x0B, "1" => 0x02, "minus" => 0x0C, "equals" => 0x0D,
     _ => throw new ArgumentException($"unknown key {name}"),
 };
 
@@ -173,6 +189,20 @@ static extern bool EnumDisplaySettings(string? device, int mode, ref DEVMODE dev
 
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 static extern int ChangeDisplaySettingsEx(string? device, ref DEVMODE devMode, nint hwnd, uint flags, nint param);
+
+// Which standard cursor is showing (screenshots don't include it).
+static string CursorName()
+{
+    var info = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+    if (!GetCursorInfo(ref info)) return "unknown";
+    if ((info.flags & 1) == 0) return "hidden";
+    foreach (var (id, name) in new[] { (32512, "arrow"), (32646, "sizeall"), (32649, "hand"), (32513, "ibeam"), (32514, "wait") })
+        if (info.hCursor == LoadCursor(0, id)) return name;
+    return $"0x{info.hCursor:X}";
+}
+
+[DllImport("user32.dll")]
+static extern bool GetCursorInfo(ref CURSORINFO info);
 
 static void Send(INPUT input)
 {
@@ -193,3 +223,6 @@ struct DEVMODE
     public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
     public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
 }
+
+[StructLayout(LayoutKind.Sequential)]
+struct CURSORINFO { public int cbSize, flags; public nint hCursor; public POINT ptScreenPos; }
