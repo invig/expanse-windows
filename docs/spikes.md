@@ -142,9 +142,12 @@ backend, with 10 windows, in the same session:
      after `Guest res`; tests that click at fixed spots should set it right before.
    - ~~The saved layout, the home layout for smaller screens, Restore Layout~~: done.
    - **Taskbar previews and notifications** can sit above the overlay.
-   - **Restoring a minimised window that was parked off-screen** brought it back once at 1/1.25
-     of its size (the VM's scale factor). Expanse doesn't resize windows, so this looks like
-     Windows; not yet looked into.
+   - ~~Restoring a minimised window that was parked off-screen came back once at 1/1.25 of its
+     size~~: not reproduced since (Explorer, Notepad and a maximised Settings window, parked, at
+     125%, minimised and restored), but the path had a real bug: a window coming back was made
+     afresh, losing where it was before Expanse moved it (so quitting didn't put it back), its home
+     spot, its chosen size (taken from whatever size it came back at, which a fit then enforced:
+     the likely cause) and its maximised state. It keeps its record now.
 3. ~~Dialogs move with their owner; maximised windows~~: done. Notes:
    - **Owned windows** are found by walking `GW_OWNER` (GetAncestor's GA_ROOTOWNER only follows
      popups' owners). Only ones with a title bar count, so tooltips, menus and drop-downs don't.
@@ -219,4 +222,4 @@ backend, with 10 windows, in the same session:
      SetDisplayConfig with SDC_TOPOLOGY_EXTEND). The guest helper's `res W H N`, `scale P N` and
      `shotall` (`vm.sh shot FILE all`) take a display.
 
-6. Next: taskbar previews over the overlay, the minimised-window size bug above.
+6. Next: taskbar previews over the overlay.

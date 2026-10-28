@@ -177,6 +177,22 @@ sealed class Canvas
                     continue;
                 }
                 elsewhere.Remove(h);
+                if (departed.TryGetValue(h, out var back))
+                {
+                    // Back from being minimised or hidden: the same window, with everything known
+                    // about it (where it was before Expanse moved it, its home spot, the size you
+                    // chose, maximised). Arrive puts it back at its spot.
+                    w = back;
+                    w.Title = Title(h);
+                    var f = w.ReadScreenFrame();
+                    w.Frame = w.Frame with { W = f.Width, H = f.Height };
+                    w.Placed = null;
+                    if (IsZoomed(h)) (w.Maximised, w.RestoredByUs) = (true, false);
+                    Log.Info($"window {w} is back");
+                    added.Add(w);
+                    next.Add(w);
+                    continue;
+                }
                 w = new CanvasWindow(h) { Maximised = IsZoomed(h) };
                 w.Frame = ScreenToCanvas(w.ReadScreenFrame());
                 w.Preferred = w.Frame.Size;
@@ -2065,6 +2081,10 @@ sealed class Canvas
                 screen = Dwm.FrameBounds(w.Hwnd).ToRectD().ToString(),
                 owned = w.Owned.Select(o => $"{o} canvas {o.Frame} screen {Dwm.FrameBounds(o.Hwnd).ToRectD()}"),
                 maximised = w.Maximised ? (w.RestoredByUs ? "restored by Expanse" : "yes") : null,
+                dpi = GetDpiForWindow(w.Hwnd),
+                original = w.Original?.ToString(),
+                home = w.Home?.ToString(),
+                preferred = $"{w.Preferred.W:0}x{w.Preferred.H:0}",
             }),
         }, new JsonSerializerOptions { WriteIndented = true });
     }
