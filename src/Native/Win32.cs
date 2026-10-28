@@ -121,6 +121,37 @@ public struct SHELLEXECUTEINFO
     public nint hIconOrMonitor, hProcess;
 }
 
+public static class Clipboard
+{
+    [DllImport("user32.dll", SetLastError = true)] static extern bool OpenClipboard(nint owner);
+    [DllImport("user32.dll")] static extern bool EmptyClipboard();
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    [DllImport("user32.dll")] static extern nint SetClipboardData(uint format, nint data);
+    [DllImport("kernel32.dll")] static extern nint GlobalAlloc(uint flags, nuint bytes);
+    [DllImport("kernel32.dll")] static extern nint GlobalLock(nint h);
+    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(nint h);
+    [DllImport("kernel32.dll")] static extern nint GlobalFree(nint h);
+
+    /// Puts `text` on the clipboard (CF_UNICODETEXT). False if the clipboard is busy.
+    public static bool SetText(nint owner, string text)
+    {
+        for (int i = 0; i < 10 && !OpenClipboard(owner); i++) Thread.Sleep(20);
+        try
+        {
+            EmptyClipboard();
+            nint h = GlobalAlloc(0x2 /* GMEM_MOVEABLE */, (nuint)((text.Length + 1) * 2));
+            if (h == 0) return false;
+            nint p = GlobalLock(h);
+            Marshal.Copy(text.ToCharArray(), 0, p, text.Length);
+            Marshal.WriteInt16(p, text.Length * 2, 0);
+            GlobalUnlock(h);
+            if (SetClipboardData(13 /* CF_UNICODETEXT */, h) == 0) { GlobalFree(h); return false; }
+            return true;
+        }
+        finally { CloseClipboard(); }
+    }
+}
+
 public static class Shcore
 {
     [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(nint monitor, int type, out uint x, out uint y);

@@ -4,6 +4,7 @@
     <AssemblyName>Expanse</AssemblyName>
     <RootNamespace>Expanse</RootNamespace>
     <ApplicationIcon>Expanse.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\Native\*.cs" Link="Native\%(Filename)%(Extension)" />

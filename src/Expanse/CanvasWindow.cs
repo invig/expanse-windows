@@ -143,7 +143,16 @@ sealed class CanvasWindow
     /// The part of the window a picture shows, in window-rect coordinates: the visible frame.
     public RECT SourceRect => new(Insets.Left, Insets.Top, WindowSize.cx - Insets.Right, WindowSize.cy - Insets.Bottom);
 
-    public override string ToString() => $"{App}[{Hwnd:X}] \"{Title}\"";
+    /// For the log: the app and the handle, never the title (titles can be private).
+    public override string ToString() => $"{App}[{Hwnd:X}]";
+
+    /// Any window, for the log: its app and handle.
+    public static string Describe(nint hwnd)
+    {
+        if (hwnd == 0) return "nothing";
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        return $"{Path.GetFileNameWithoutExtension(Kernel32.ProcessPath(pid) ?? "?")}[{hwnd:X}]";
+    }
 
     static readonly HashSet<string> shellClasses = new()
     {

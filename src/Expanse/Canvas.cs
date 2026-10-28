@@ -173,7 +173,7 @@ sealed class Canvas
                 // left alone it would be out of reach.
                 if (OnOtherMonitorOnly(Dwm.FrameBounds(h)) && !departed.ContainsKey(h) && !savedPool.Any(e => e.Hwnd == h))
                 {
-                    if (elsewhere.Add(h)) Log.Info($"window 0x{h:X} \"{Title(h)}\" is on another monitor: left alone");
+                    if (elsewhere.Add(h)) Log.Info($"window {CanvasWindow.Describe(h)} is on another monitor: left alone");
                     continue;
                 }
                 elsewhere.Remove(h);
@@ -1189,6 +1189,13 @@ sealed class Canvas
         new(Elevation.IsElevated ? "Include Admin Windows" : "Include Admin Windows…", ToggleAdminWindows, Elevation.IsElevated, Enabled: !paused),
         new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
         null,
+        new("Troubleshooting", null, Children: new Tray.Item?[]
+        {
+            new("Detailed Logging", ToggleDetailedLogging, settings.DetailedLogging),
+            new("Copy Logs for a Bug Report", CopyLogs),
+            new("Show Log File", ShowLogFile, Enabled: File.Exists(Log.FilePath)),
+        }),
+        null,
         new("Quit Expanse", Quit),
     };
 
@@ -1500,7 +1507,7 @@ sealed class Canvas
     static string Focus(nint hwnd)
     {
         nint before = GetForegroundWindow();
-        string from = before == 0 ? "nothing" : $"\"{Title(before)}\"";
+        string from = CanvasWindow.Describe(before);
         bool returned = SetForegroundWindow(hwnd);
         // Accepted, it can still take a while to show (a window just maximised, say): an Alt tap
         // then would land in it, and WinUI apps show their key tips.
@@ -1927,11 +1934,17 @@ sealed class Canvas
         var parts = request.Text.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         string verb = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
         string arg = parts.Length > 1 ? parts[1].Trim() : "";
-        Log.Info($"command: {request.Text.Trim()}");
+        // Not the arguments of pick and close: they're window titles.
+        Log.Info($"command: {(verb is "pick" or "close" && arg.Length > 0 ? verb + " (title)" : request.Text.Trim())}");
         switch (verb)
         {
             case "state": request.Reply(State()); break;
             case "windows": request.Reply(CanvasWindow.Describe()); break;
+            case "logging": // Detailed Logging on or off
+                if ((arg == "on") != settings.DetailedLogging) ToggleDetailedLogging();
+                request.Reply($"detailed logging {(settings.DetailedLogging ? "on" : "off")}");
+                break;
+            case "copylogs": CopyLogs(); request.Reply("copied"); break;
             case "admin": // as Include Admin Windows on the tray menu
                 request.Reply(Elevation.IsElevated ? "starting again as you" : "starting again as administrator (Windows asks first)");
                 ToggleAdminWindows();
@@ -2090,6 +2103,38 @@ sealed class Canvas
     }
 
     /// Puts every window back where it was before Expanse moved it, then quits.
+    // MARK: Troubleshooting
+
+    void ToggleDetailedLogging()
+    {
+        settings.DetailedLogging = !settings.DetailedLogging;
+        settings.Save();
+        if (settings.DetailedLogging) Log.StartFresh();
+        Log.ToFile = settings.DetailedLogging;
+        Log.Info($"detailed logging {(settings.DetailedLogging ? "on" : "off")}");
+    }
+
+    void CopyLogs()
+    {
+        var lines = new[]
+        {
+            $"Canvas: {windows.Count} windows, {(paused ? "paused" : "running")}, auto-centre {(settings.AutoCentre ? "on" : "off")}",
+            $"Desktop picture background {(settings.Wallpaper ? "on" : "off")}, pictures {pictures.Name}, detailed logging {(settings.DetailedLogging ? "on" : "off")}",
+        };
+        bool copied = BugReport.Copy(overlay.Hwnd, lines);
+        Log.Info(copied ? "copied logs for a bug report" : "copy logs: the clipboard was busy");
+        tray.Notify(copied ? "Logs copied" : "Couldn't copy the logs",
+            copied ? (settings.DetailedLogging ? "Paste them into an issue, with a line about what happened."
+                                               : "Paste them into an issue. For more, turn on Detailed Logging and try again.")
+                   : "The clipboard was busy. Try again in a moment.");
+    }
+
+    static void ShowLogFile()
+    {
+        if (File.Exists(Log.FilePath))
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{Log.FilePath}\"") { UseShellExecute = false });
+    }
+
     // MARK: Admin windows
 
     /// Admin windows seen, each logged once; the first ever also gets a note from the tray icon.
@@ -2106,7 +2151,7 @@ sealed class Canvas
         }
         foreach (var h in found.Where(adminWindows.Add))
         {
-            Log.Info($"admin window 0x{h:X} \"{Title(h)}\" stays off the canvas: Expanse isn't running as administrator");
+            Log.Info($"admin window {CanvasWindow.Describe(h)} stays off the canvas: Expanse isn't running as administrator");
             if (settings.AdminNoteShown) continue;
             string title = Title(h);
             if (title.Length > 40) title = title[..39] + "…";

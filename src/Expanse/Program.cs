@@ -8,6 +8,7 @@ if (args.Contains("--restore"))
     return 0;
 }
 
+Log.ToFile = Settings.Load().DetailedLogging;
 using var mutex = new Mutex(true, @"Local\Expanse", out bool first);
 if (!first)
 {
