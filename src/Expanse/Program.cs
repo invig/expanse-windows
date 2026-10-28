@@ -9,6 +9,9 @@ if (args.Contains("--restore"))
 }
 
 Log.ToFile = Settings.Load().DetailedLogging;
+// An expanse:// link: handed to the running Expanse, which does it. This one goes again.
+if (args.FirstOrDefault(a => a.StartsWith(Links.Scheme + ":", StringComparison.OrdinalIgnoreCase)) is string link)
+    return Links.Forward(link) ? 0 : 1;
 using var mutex = new Mutex(true, @"Local\Expanse", out bool first);
 if (!first)
 {
@@ -72,6 +75,7 @@ if (!RegisterHotKey(overlay.Hwnd, Canvas.HotkeyAutoCentre, MOD_CONTROL | MOD_ALT
     Log.Info("couldn't register Ctrl+Alt+Shift+`: something else has it");
 
 new CommandServer(overlay.Hwnd).Start();
+Links.Register();
 canvas.Start();
 canvas.WelcomeIfNew();
 

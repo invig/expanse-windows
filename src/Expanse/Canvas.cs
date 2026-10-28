@@ -2044,6 +2044,34 @@ sealed class Canvas
             case "windows": request.Reply(CanvasWindow.Describe()); break;
             case "centre": CentreCurrentWindow(); WhenIdle(request); break;
             case "restoreall": RestoreAll(); request.Reply("done"); break;
+            case "fit": // the 0 key, from anywhere: zoomed out, everything in view
+                if (!active) Enter(zoomOut: true);
+                else { CancelAnimation(); returnCamera = null; Animate(FitCamera(1), 0.22); }
+                WhenIdle(request);
+                break;
+            case "zoom" when double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out double scale):
+                if (!active) Enter(zoomOut: true, overview: false);
+                ZoomKey(Math.Clamp(scale, Camera.MinScale, Camera.MaxScale));
+                WhenIdle(request);
+                break;
+            case "pan":
+            {
+                var d = arg.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(v => double.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, out double n) ? n : 0).ToArray();
+                if (!active) Enter(zoomOut: true, overview: false);
+                if (d.Length == 2) PanBy(new Vec(-d[0], -d[1]));
+                request.Reply(State());
+                break;
+            }
+            case "focus": // a window of the app named (its name or exe), as expanse://focus?app=
+                if (windows.LastOrDefault(w => w.AppName.Equals(arg, StringComparison.OrdinalIgnoreCase) ||
+                                               w.App.Equals(arg, StringComparison.OrdinalIgnoreCase)) is CanvasWindow f)
+                {
+                    if (active) Exit(f); else Glide(f);
+                    WhenIdle(request);
+                }
+                else request.Reply($"no window of {arg}");
+                break;
             case "login": // Open at Login on or off
                 if (arg is "on" or "off") LoginItem.Set(arg == "on");
                 request.Reply($"open at login {(LoginItem.IsOn ? "on" : "off")}");
