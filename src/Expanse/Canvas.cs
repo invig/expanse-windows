@@ -10,13 +10,13 @@ namespace Expanse;
 ///
 /// At 100% the windows are real: each sits where the camera puts it, which on Windows can be
 /// wholly off-screen (no corner parking as on the Mac). Zoomed out, the overlay rises and shows
-/// every window as a live DWM thumbnail, laid out by the camera. Clicking one animates the
+/// every window as a live picture from DWM (see IPictures), laid out by the camera. Clicking one animates the
 /// camera to it at 100%, then the real windows move once, it gets focus and the overlay drops.
 /// Timings and the camera maths follow the Mac app (CanvasController.swift).
 sealed class Canvas
 {
     readonly Overlay overlay;
-    readonly Pictures pictures;
+    IPictures pictures;
     readonly Wallpaper wallpaper = new();
     /// Bottom-most first: the last window is the frontmost, as in the Mac app.
     readonly List<CanvasWindow> windows = new();
@@ -43,10 +43,10 @@ sealed class Canvas
         public double MaxGap, LayoutTotal;
     }
 
-    public Canvas(Overlay overlay)
+    public Canvas(Overlay overlay, string pictureKind)
     {
         this.overlay = overlay;
-        pictures = new Pictures(overlay.Hwnd);
+        pictures = Pictures.Create(overlay.Hwnd, pictureKind);
         (monitor, work) = PrimaryMonitor();
         overlay.Painter = Paint;
         overlay.Handler = Handle;
@@ -151,8 +151,15 @@ sealed class Canvas
         gliding = !zoomOut;
         hovered = null;
         camera.Scale = 1;
-        pictures.Attach(windows);
+        if (!pictures.Attach(windows) && pictures is SharedVisualPictures)
+        {
+            Log.Info("pictures: shared visuals failed for every window; falling back to DWM thumbnails");
+            pictures.Dispose();
+            pictures = new ThumbnailPictures(overlay.Hwnd);
+            pictures.Attach(windows);
+        }
         pictures.Layout(windows, camera, View);
+        pictures.Flush();
         overlay.Show(monitor, activate: zoomOut);
         Lift();
         if (zoomOut)
@@ -396,7 +403,13 @@ sealed class Canvas
         a.Completion?.Invoke();
         if (animation == null)
         {
-            if (active && !gliding) overlay.Invalidate();
+            if (active && !gliding)
+            {
+                // The pointer may already be over a window, with no move to tell us.
+                GetCursorPos(out var p);
+                hovered = WindowAt(new Vec(p.X - monitor.Left, p.Y - monitor.Top));
+                overlay.Invalidate();
+            }
             CompleteIdleWaiters();
         }
     }
@@ -556,13 +569,19 @@ sealed class Canvas
                 if (Find(arg) is CanvasWindow c) { PostMessage(c.Hwnd, WM_CLOSE, 0, 0); request.Reply($"closing {c}"); }
                 else request.Reply($"no window matches \"{arg}\"");
                 break;
+            case "pictures":
+                if (active) { request.Reply("back to 100% first"); break; }
+                pictures.Dispose();
+                pictures = Pictures.Create(overlay.Hwnd, arg);
+                request.Reply(pictures.Name);
+                break;
             case "bench": StartBench(request, double.TryParse(arg, out double secs) ? secs : 5); break;
             case "quit":
                 request.Reply("bye");
                 Quit();
                 break;
             default:
-                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, bench [SECONDS], quit");
+                request.Reply("commands: state, log [N], toggle, zoomout, back, pick <title|app|0xHWND>, close <same>, view X Y SCALE, pictures shared|dwm, bench [SECONDS], quit");
                 break;
         }
     }
@@ -588,6 +607,7 @@ sealed class Canvas
         {
             active,
             gliding,
+            pictures = pictures.Name,
             animating = animation != null,
             camera = new { x = camera.Origin.X, y = camera.Origin.Y, scale = camera.Scale },
             screen = monitor.ToString(),
@@ -616,7 +636,7 @@ sealed class Canvas
         PostQuitMessage(0);
     }
 
-    // MARK: Bench (spike: frame pacing of DWM thumbnails while the camera moves)
+    // MARK: Bench (frame pacing of the pictures while the camera moves)
 
     sealed class Bench
     {
@@ -658,7 +678,7 @@ sealed class Canvas
         var dwmCpu = DwmCpuTime();
         b.Request.Reply(JsonSerializer.Serialize(new
         {
-            mode = "dwm-thumbnails",
+            mode = pictures.Name,
             windows = pictures.Count,
             seconds = wall / 1000,
             frames = b.Gaps.Count + 1,

@@ -17,8 +17,9 @@ Early days. What works so far:
 - **Quitting** puts every window back where it was before Expanse moved it, as does the next start
   after a crash (`Expanse.exe --restore` does it by hand).
 
-C# / .NET 10, built for ARM64 for now (the dev VM). Live pictures are DWM thumbnails. See [docs/spikes.md](docs/spikes.md)
-for why, and for what's next.
+C# / .NET 10, built for ARM64 for now (the dev VM). Live pictures are DWM's shared thumbnail
+visuals, with plain DWM thumbnails as the fallback. See [docs/spikes.md](docs/spikes.md) for why,
+and for what's next.
 
 ## How it works
 
@@ -27,9 +28,14 @@ a camera (origin and scale) over one canvas, each window at a fixed spot.
 
 - **At 100% windows are real** and sit exactly where the camera puts them. Unlike macOS, Windows lets
   a window sit wholly off-screen, so there's no corner parking.
-- **Zoomed out** a full-screen, topmost overlay rises with a DWM thumbnail of every window, first
+- **Zoomed out** a full-screen, topmost overlay rises with a live picture of every window, first
   exactly over the real windows, then animated out (ease-out cubic, 0.22 s; scale interpolated in log
   space, as on the Mac).
+- **The pictures are DWM shared thumbnail visuals:** DirectComposition visuals that DWM fills with
+  each window, in a visual tree over the overlay. Each sits at its canvas spot inside one canvas
+  visual, so the camera is a single transform per frame. The API is undocumented (dwmapi #147). If
+  it's missing or fails, Expanse falls back to documented DWM thumbnails, one call per picture per
+  frame. `Expanse.exe --pictures dwm` forces the fallback.
 - **Off-screen windows come on-screen underneath the overlay** while it's up. GDI-drawn apps
   (classic Win32, Explorer's file list) only paint the parts of a window that are on a screen, so
   parked ones would otherwise show stale or empty pictures.
@@ -59,7 +65,7 @@ the signed-in session (`scripts/guest/desk.ps1`).
 scripts/vm.sh setup         # once: OpenSSH with this Mac's key, the .NET 10 SDK
 scripts/vm.sh build         # sync the source over and build everything
 scripts/vm.sh start         # (re)start Expanse on the VM's desktop
-scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, bench 5, quit
+scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, log, bench 5, pictures dwm|shared, quit
 scripts/vm.sh shot          # out/shot.png: the VM's screen
 ```
 

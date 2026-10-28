@@ -2,11 +2,49 @@ using Expanse.Native;
 
 namespace Expanse;
 
-/// Live window pictures on the overlay, as DWM thumbnails: DWM draws each window straight
-/// into the overlay at a rect we give it, with no copying and no capture indicator. The cost:
-/// DWM draws them over the overlay's own content, so anything of ours that must sit on top of
-/// a picture needs a window of its own above the overlay.
-sealed class Pictures
+/// Live window pictures on the overlay, laid out by the camera. Two ways to get them from DWM:
+/// shared thumbnail visuals (the default) and plain DWM thumbnails (the fallback).
+interface IPictures : IDisposable
+{
+    string Name { get; }
+    int Count { get; }
+
+    /// A picture for each window, bottom-most first. False if none could be made at all (so
+    /// the caller can fall back to the other kind).
+    bool Attach(IEnumerable<CanvasWindow> bottomToTop);
+
+    /// Puts `w`'s picture on top of the others.
+    void Raise(CanvasWindow w);
+
+    void Detach();
+
+    /// Positions every picture for `camera` (view = the overlay's client area).
+    void Layout(IReadOnlyList<CanvasWindow> windows, Camera camera, RectD view);
+
+    /// Waits until the last layout is on screen: before the overlay is shown, so it never
+    /// appears without its pictures.
+    void Flush();
+}
+
+static class Pictures
+{
+    /// Shared visuals unless `kind` is "dwm", or DirectComposition isn't available.
+    public static IPictures Create(nint overlay, string kind)
+    {
+        if (kind != "dwm")
+        {
+            try { return new SharedVisualPictures(overlay, failForTesting: kind == "shared-fail"); }
+            catch (Exception e) { Log.Info($"pictures: no shared visuals ({e.Message}); using DWM thumbnails"); }
+        }
+        return new ThumbnailPictures(overlay);
+    }
+}
+
+/// DWM thumbnails (documented): DWM draws each window straight into the overlay at a rect we
+/// give it. The camera costs one call into DWM per picture per frame, and DWM draws thumbnails
+/// over the overlay's own content, so our UI can't sit on top of a picture without a window of
+/// its own.
+sealed class ThumbnailPictures(nint dest) : IPictures
 {
     sealed class Picture
     {
@@ -15,18 +53,16 @@ sealed class Pictures
         public bool Visible;
     }
 
-    readonly nint dest;
     readonly Dictionary<nint, Picture> pictures = new();
 
-    public Pictures(nint destination) => dest = destination;
-
+    public string Name => "dwm-thumbnails";
     public int Count => pictures.Count;
 
-    /// Registers a picture for each window, bottom-most first: DWM stacks thumbnails in the
-    /// order they're registered.
-    public void Attach(IEnumerable<CanvasWindow> bottomToTop)
+    public bool Attach(IEnumerable<CanvasWindow> bottomToTop)
     {
-        foreach (var w in bottomToTop) Add(w);
+        int tried = 0;
+        foreach (var w in bottomToTop) { tried++; Add(w); }
+        return tried == 0 || pictures.Count > 0;
     }
 
     void Add(CanvasWindow w)
@@ -36,7 +72,7 @@ sealed class Pictures
         pictures[w.Hwnd] = new Picture { Thumb = thumb };
     }
 
-    /// Puts `w` on top of the other pictures (registered again, last).
+    /// DWM stacks thumbnails in the order they're registered, so this registers it again.
     public void Raise(CanvasWindow w)
     {
         if (pictures.Remove(w.Hwnd, out var p)) Dwm.DwmUnregisterThumbnail(p.Thumb);
@@ -49,8 +85,7 @@ sealed class Pictures
         pictures.Clear();
     }
 
-    /// Positions every picture for `camera`. Pictures wholly outside the view are hidden, and
-    /// unchanged ones aren't sent again: each update is a call into DWM.
+    /// Pictures wholly outside the view are hidden, and unchanged ones aren't sent again.
     public void Layout(IReadOnlyList<CanvasWindow> windows, Camera camera, RectD view)
     {
         foreach (var w in windows)
@@ -75,6 +110,10 @@ sealed class Pictures
             p.Visible = visible;
         }
     }
+
+    public void Flush() { }
+
+    public void Dispose() => Detach();
 
     static bool Same(RECT a, RECT b) => a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
 }

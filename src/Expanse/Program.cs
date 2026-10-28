@@ -18,8 +18,12 @@ if (!first)
 Log.Info($"Expanse starting (pid {Environment.ProcessId})");
 Originals.RestoreFromFile();
 
+// --pictures dwm: DWM thumbnails instead of shared visuals (which fall back to them anyway).
+int kindAt = Array.IndexOf(args, "--pictures");
+string pictureKind = kindAt >= 0 && kindAt + 1 < args.Length ? args[kindAt + 1] : "shared";
+
 var overlay = new Overlay();
-var canvas = new Canvas(overlay);
+var canvas = new Canvas(overlay, pictureKind);
 AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 {
     Log.Info($"crashed: {e.ExceptionObject}");

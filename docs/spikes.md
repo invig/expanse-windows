@@ -10,10 +10,9 @@ in `src/Spikes` (plus `bench` in Expanse itself); raw results are in `out/spike-
 
 ## Recommendation
 
-- **Pictures:** keep DWM thumbnails as the shipping route for now; the milestone uses them. Next,
-  move the canvas to **shared thumbnail visuals** (DirectComposition). Keep DWM thumbnails as the
-  automatic fallback behind the same `Pictures` interface. Don't use Windows.Graphics.Capture for
-  the canvas.
+- **Pictures:** use **shared thumbnail visuals** (DirectComposition), with DWM thumbnails as the
+  automatic fallback behind the same `IPictures` interface. Done since; see the follow-up
+  below. Don't use Windows.Graphics.Capture for the canvas.
 - **Parking:** park windows at their exact camera spots, fully off-screen. While the overlay is
   up, Expanse moves every off-screen window onto the screen underneath it, so GDI apps paint
   (already in the milestone). No 2 px strip.
@@ -111,11 +110,25 @@ while it's the active app.
   here, but `scp -O` works.
 - **Disk:** the VM's C: drive has about 15 GB free.
 
+## Follow-up: Expanse on shared visuals (same day)
+
+Expanse now draws its canvas with shared visuals, falling back to DWM thumbnails (tested by
+forcing every shared visual to fail: `ctl pictures shared-fail`). The `bench` was run twice per
+backend, with 10 windows, in the same session:
+
+| Backend | fps | p95 frame gap | Worst gap | Our cost per frame | DWM CPU |
+|---|---|---|---|---|---|
+| DWM thumbnails | 52–59 | 26–33 ms | 117–119 ms | 1.1–1.6 ms | 48–58% |
+| Shared visuals | 63 | 23–25 ms | 45–53 ms | 0.12 ms | 32–34% |
+
+- **Zoom-out and dive timings are noisy in the VM for both backends:** 4 to 14 frames for a
+  0.2 s animation, at 75 Hz.
+- **A Windows toast can sit above our topmost overlay.** The OneDrive one did.
+
 ## Next
 
-1. A shared-visual canvas behind the `Pictures` interface, with the fallback.
-2. Live window tracking (`SetWinEventHook`): new, closed, moved, minimised and focus changes.
-3. Hops on Ctrl+Alt+arrows; port the layout maths (nearest window, snapping, Tidy) with its
+1. Live window tracking (`SetWinEventHook`): new, closed, moved, minimised and focus changes.
+2. Hops on Ctrl+Alt+arrows; port the layout maths (nearest window, snapping, Tidy) with its
    tests; the saved layout.
-4. Picking a parked window from the taskbar or Alt-Tab should glide to it. Dialogs should move
+3. Picking a parked window from the taskbar or Alt-Tab should glide to it. Dialogs should move
    with their owner. Then maximised windows, admin windows, several monitors and mixed DPI.

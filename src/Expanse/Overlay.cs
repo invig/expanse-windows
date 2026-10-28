@@ -5,7 +5,7 @@ namespace Expanse;
 
 /// The full-screen window the canvas is drawn in: topmost, out of the taskbar and Alt-Tab,
 /// hidden at 100%. It paints the backdrop and labels (double-buffered GDI); the live window
-/// pictures are DWM thumbnails composed on top of that. Input goes to `Handler`.
+/// pictures (IPictures) are composed on top of that. Input goes to `Handler`.
 sealed class Overlay
 {
     public const uint WM_COMMAND_REQUEST = WM_APP + 1;
