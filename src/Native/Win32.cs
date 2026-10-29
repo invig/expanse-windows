@@ -241,8 +241,17 @@ public static class User32
         WM_SETCURSOR = 0x20, WM_MOUSEACTIVATE = 0x21, WM_KEYDOWN = 0x100, WM_SYSKEYDOWN = 0x104, WM_TIMER = 0x113,
         WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, WM_MBUTTONDOWN = 0x207,
         WM_MOUSEWHEEL = 0x20A, WM_HOTKEY = 0x312, WM_DISPLAYCHANGE = 0x7E, WM_DPICHANGED = 0x2E0,
-        WM_NCHITTEST = 0x84, WM_ACTIVATE = 0x6, WM_SYSCOMMAND = 0x112, WM_APP = 0x8000;
+        WM_NCHITTEST = 0x84, WM_ACTIVATE = 0x6, WM_SYSCOMMAND = 0x112, WM_APP = 0x8000,
+        WM_POWERBROADCAST = 0x218, WM_WTSSESSION_CHANGE = 0x2B1;
     public const int SC_KEYMENU = 0xF100;
+
+    /// The screen locked or unlocked (WM_WTSSESSION_CHANGE's wParam), and the displays turning off
+    /// or on (WM_POWERBROADCAST with PBT_POWERSETTINGCHANGE for GUID_CONSOLE_DISPLAY_STATE, whose
+    /// one DWORD of data is 0 off, 1 on, 2 dimmed).
+    public const int WTS_SESSION_LOCK = 0x7, WTS_SESSION_UNLOCK = 0x8, PBT_POWERSETTINGCHANGE = 0x8013;
+    public static readonly Guid GUID_CONSOLE_DISPLAY_STATE = new("6FE69556-704A-47A0-8F24-C28D936FDA47");
+    [DllImport(Dll, SetLastError = true)] public static extern nint RegisterPowerSettingNotification(nint recipient, in Guid setting, uint flags);
+    [DllImport("wtsapi32.dll", SetLastError = true)] public static extern bool WTSRegisterSessionNotification(nint hwnd, uint flags);
     public const int MA_ACTIVATE = 1, MA_NOACTIVATE = 3;
 
     public const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8, MOD_NOREPEAT = 0x4000;
@@ -278,6 +287,7 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetWindowText(nint hwnd, StringBuilder sb, int max);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetClassName(nint hwnd, StringBuilder sb, int max);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetWindowRect(nint hwnd, out RECT r);
+    [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint FindWindow(string? className, string? title);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetClientRect(nint hwnd, out RECT r);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetAncestor(nint hwnd, uint flags);

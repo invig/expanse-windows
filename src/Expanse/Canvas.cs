@@ -77,6 +77,8 @@ sealed class Canvas
     /// While displays change, Windows moves windows about; until things settle those moves are put
     /// back, not followed (the Mac's suspendTracking).
     bool suspendTracking;
+    /// At the lock screen, or with the displays off: tracking stays suspended until you're back.
+    bool screenLocked, displaysOff;
     bool screenResized;
     CanvasWindow? centreAfterResize; // the window you were in when the screen changed
     SizeD? screenOverride;           // `screen W H`: pretend the screen is that size (testing)
@@ -140,6 +142,11 @@ sealed class Canvas
         updater = new Updater(Post) { OnReady = UpdateReady };
         events = new WinEvents(OnWindowEvent);
         desktopInput = new DesktopInput(overlay.Hwnd);
+        // Told when the screen locks and the displays sleep (see Handle).
+        if (!WTSRegisterSessionNotification(overlay.Hwnd, 0 /* NOTIFY_FOR_THIS_SESSION */))
+            Log.Info($"not told of the screen locking ({Marshal.GetLastPInvokeError()})");
+        if (RegisterPowerSettingNotification(overlay.Hwnd, GUID_CONSOLE_DISPLAY_STATE, 0 /* DEVICE_NOTIFY_WINDOW_HANDLE */) == 0)
+            Log.Info($"not told of the displays sleeping ({Marshal.GetLastPInvokeError()})");
         lastFocusedWindow = GetForegroundWindow();
     }
 
@@ -596,9 +603,11 @@ sealed class Canvas
     /// spot in the derived layout. Re-deriving everything would also undo whatever the layout
     /// picked up since then (windows opening and closing change the derived layout), and every
     /// window would jump.
-    void FitLayoutToScreen(bool tidy, IReadOnlySet<nint>? rederiving = null)
+    /// `rehoming`: false when the home spots were just set (see RestoreLayout), so RehomeStrays
+    /// doesn't rework them.
+    void FitLayoutToScreen(bool tidy, IReadOnlySet<nint>? rederiving = null, bool rehoming = true)
     {
-        RehomeStrays();
+        if (rehoming) RehomeStrays();
         var view = WorkSize;
         var home = windows.Select(w =>
         {
@@ -708,11 +717,21 @@ sealed class Canvas
     void DisplaysChanging(int delayMs = 1000)
     {
         if (paused) return;
+        DisplaysWillChange();
+        SetTimer(overlay.Hwnd, RelayoutTimer, (uint)delayMs, 0);
+        SetTimer(overlay.Hwnd, FinalRelayoutTimer, (uint)delayMs + 1500, 0);
+    }
+
+    /// Windows is about to move windows about (or the lock screen hides them): the window you're
+    /// in is noted, and moves aren't followed until a relayout has settled.
+    void DisplaysWillChange()
+    {
+        if (paused) return;
         centreAfterResize ??= CanvasWindowOf(GetForegroundWindow()) ?? CanvasWindowOf(lastFocusedWindow);
         suspendTracking = true;
         KillTimer(overlay.Hwnd, SettleTimer);
-        SetTimer(overlay.Hwnd, RelayoutTimer, (uint)delayMs, 0);
-        SetTimer(overlay.Hwnd, FinalRelayoutTimer, (uint)delayMs + 1500, 0);
+        KillTimer(overlay.Hwnd, RelayoutTimer);
+        KillTimer(overlay.Hwnd, FinalRelayoutTimer);
     }
 
     void RelayoutForScreen(bool final)
@@ -1122,6 +1141,10 @@ sealed class Canvas
         LayoutStore.ToDpi(layout, canvasDpi);
         var pool = layout.Windows.ToList();
         var open = OpenKeys();
+        // Taken on this screen: every window where you saw it then. On another, from home spots,
+        // fitted to this one.
+        var view = WorkSize;
+        bool sameScreen = layout.FittedWidth == view.W && layout.FittedHeight == view.H;
         int restored = 0;
         ShowRearranged(() =>
         {
@@ -1130,11 +1153,16 @@ sealed class Canvas
                 if (LayoutStore.TakeMatch(w, open, pool) is not SavedWindow e) continue;
                 // Its home spot and chosen size; fitting works out where it goes on this screen.
                 w.Home = new Vec(e.HX ?? e.X, e.HY ?? e.Y);
-                w.Frame = w.Frame with { X = w.Home.Value.X, Y = w.Home.Value.Y };
+                var at = sameScreen ? new Vec(e.X, e.Y) : w.Home.Value;
+                w.Frame = w.Frame with { X = at.X, Y = at.Y };
+                w.FitPush = default;
                 if ((e.PW ?? e.W) is double pw && (e.PH ?? e.H) is double ph && pw > 0) w.Preferred = new SizeD(pw, ph);
                 restored++;
             }
-            FitLayoutToScreen(tidy: false);
+            if (sameScreen) fittedView = view;
+            // The snapshot's home spots as they are: re-homing works them out from where windows
+            // are now, which is what the restore is replacing.
+            FitLayoutToScreen(tidy: false, rederiving: sameScreen ? new HashSet<nint>() : null, rehoming: false);
         }, "restore layout");
         Log.Info($"restored a layout: {restored} of {windows.Count} windows");
     }
@@ -1150,8 +1178,11 @@ sealed class Canvas
         if (desktopsPanel.Panel.Contains(p))
         {
             // The Desktops panel: a tile goes to that desktop (its windows come onto the canvas).
+            // This desktop's own tile: back to it at 100%, which is what leaving the canvas does.
             int i = desktopsPanel.TileAt(p);
-            if (i >= 0 && desktopsPanel.Current >= 0 && i != desktopsPanel.Current)
+            if (i < 0 || desktopsPanel.Current < 0) return;
+            if (i == desktopsPanel.Current) Exit(null);
+            else
             {
                 Log.Info($"desktop {desktopsPanel.Current + 1} -> {i + 1}");
                 VirtualDesktops.Move(i - desktopsPanel.Current);
@@ -1358,9 +1389,87 @@ sealed class Canvas
         var screen = new Vec((short)(at & 0xFFFF), (short)((at >> 16) & 0xFFFF));
         double step = 0.5 * UiScale; // 60 px a notch at 100%
         if (horizontal) PanBy(new Vec(-delta * step, 0));
-        else if (ctrl) ZoomBy(Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top));
+        else if (ctrl) { ZoomBy(Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top)); return; }
         else if (shift) PanBy(new Vec(delta * step, 0));
         else PanBy(new Vec(0, delta * step));
+        // A wheel's turns (and a touchpad's) say nothing of when the scroll ends: a pause is the end.
+        SetTimer(overlay.Hwnd, ScrollEndTimer, 250, 0);
+    }
+
+    const nint ScrollEndTimer = 10;
+
+    /// A scroll at 100% has ended: if it left windows cut off by the screen's edges, the view moves
+    /// on a little, to where they're whole or out of sight (see SnappedCamera). As on the Mac.
+    void ScrollEnded()
+    {
+        if (!active || gliding || animation != null || drag != null || Math.Abs(camera.Scale - 1) >= 0.001) return;
+        var target = SnappedCamera();
+        if (target.Origin == camera.Origin) return;
+        Log.Info($"scroll ended: view snapped by {camera.Origin.X - target.Origin.X:0}, {camera.Origin.Y - target.Origin.Y:0}");
+        Animate(target, 0.25);
+    }
+
+    /// The view at 100%, moved by the least that leaves the fewest windows cut off by the edges of
+    /// the work area (where they'll be at 100%), and at least one whole. Each move tried puts the
+    /// edge of a window on screen a gap in from the screen's, which (windows being a gap apart) also
+    /// takes the next one just out of sight, or centres a window with less than that to spare (one
+    /// filling the screen, say). None further than half the screen: you scrolled here, so the view
+    /// stays near.
+    Camera SnappedCamera()
+    {
+        var screen = new RectD(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height);
+        var frames = windows.Select(w => camera.ToView(w.Frame)).ToList();
+        var shown = frames.Where(r => r.Intersects(screen)).ToList();
+        if (!shown.Any(r => !screen.Contains(r))) return camera;
+        const double g = Layout.Gap;
+        // Moves along one side that line a window up with the screen (`from`, `to`: its edges).
+        static IEnumerable<double> Moves(double from, double to, double start, double length)
+        {
+            double spare = length - (to - from);
+            yield return start + g - from;
+            yield return start + length - g - to;
+            if (spare < 2 * g) yield return start + spare / 2 - from;
+        }
+        var xs = shown.SelectMany(r => Moves(r.X, r.Right, screen.X, screen.W)).Prepend(0).Where(d => Math.Abs(d) <= screen.W / 2).ToList();
+        var ys = shown.SelectMany(r => Moves(r.Y, r.Bottom, screen.Y, screen.H)).Prepend(0).Where(d => Math.Abs(d) <= screen.H / 2).ToList();
+        // How cut off a window is along one side: 0 whole or out of sight, 0.5 half on screen. One
+        // too big for the screen that way counts as whole.
+        static double Cut(double visible, double length, double screen)
+        {
+            if (length <= 0 || length > screen) return 0;
+            double f = Math.Clamp(visible / length, 0, 1);
+            return Math.Min(f, 1 - f);
+        }
+        // Lower is better: none whole, then how much is cut off and how far the view moves.
+        (bool noneWhole, double cut) Cost(double dx, double dy)
+        {
+            bool whole = false;
+            double cuts = 0;
+            foreach (var r in frames)
+            {
+                var o = r.Offset(new Vec(dx, dy));
+                // Out of sight, just touching the screen's edge included.
+                if (!o.Intersects(screen)) continue;
+                whole |= screen.Contains(o);
+                double vw = Math.Min(o.Right, screen.Right) - Math.Max(o.X, screen.X);
+                double vh = Math.Min(o.Bottom, screen.Bottom) - Math.Max(o.Y, screen.Y);
+                cuts += Cut(vw, o.W, screen.W) + Cut(vh, o.H, screen.H);
+            }
+            // Of two that leave as much cut off, the shorter move.
+            return (!whole, cuts + 0.5 * (Math.Abs(dx) / screen.W + Math.Abs(dy) / screen.H));
+        }
+        var best = (dx: 0.0, dy: 0.0, cost: Cost(0, 0));
+        foreach (double dx in xs)
+            foreach (double dy in ys)
+            {
+                var c = Cost(dx, dy);
+                if ((!c.noneWhole && best.cost.noneWhole) || (c.noneWhole == best.cost.noneWhole && c.cut < best.cost.cut - 0.001))
+                    best = (dx, dy, c);
+            }
+        var target = camera;
+        target.Pan(new Vec(best.dx, best.dy));
+        target.Origin = new Vec(Math.Round(target.Origin.X), Math.Round(target.Origin.Y));
+        return target;
     }
 
     // MARK: Dialogs over the canvas
@@ -1522,7 +1631,12 @@ sealed class Canvas
         null,
         new("Centre Current Window\tCtrl+Alt+C", CentreCurrentWindow, Enabled: !paused),
         new("Auto-Centre Focused Window\tCtrl+Alt+Shift+`", ToggleAutoCentre, settings.AutoCentre),
-        new("Desktop Picture Background", () => { settings.Wallpaper = !settings.Wallpaper; settings.Save(); }, settings.Wallpaper),
+        new("Desktop Picture Background", () =>
+        {
+            settings.Wallpaper = !settings.Wallpaper;
+            settings.Save();
+            if (active) { pictures.SetDesktop(settings.Wallpaper ? monitor : null); Redraw(); }
+        }, settings.Wallpaper),
         new("Show Window Names", () => { settings.ShowNames = !settings.ShowNames; settings.Save(); }, settings.ShowNames),
         new("Hot Corner", null, Children: HotCorner.Choices.Select(c => (Tray.Item?)new Tray.Item(c.title, () =>
         {
@@ -1593,6 +1707,7 @@ sealed class Canvas
             pictures = new ThumbnailPictures(overlay.Hwnd);
             pictures.Attach(Stack());
         }
+        pictures.SetDesktop(settings.Wallpaper ? monitor : null);
         Relayout();
         pictures.Flush();
         overlay.Show(monitor, activate: zoomOut);
@@ -2072,8 +2187,13 @@ sealed class Canvas
                 KillTimer(overlay.Hwnd, FinalRelayoutTimer);
                 RelayoutForScreen(final: true);
                 return 0;
+            case WM_TIMER when wParam == ScrollEndTimer:
+                KillTimer(overlay.Hwnd, ScrollEndTimer);
+                ScrollEnded();
+                return 0;
             case WM_TIMER when wParam == SettleTimer:
                 KillTimer(overlay.Hwnd, SettleTimer);
+                if (screenLocked || displaysOff) return 0;
                 suspendTracking = false;
                 Log.Info("display change settled");
                 return 0;
@@ -2102,6 +2222,7 @@ sealed class Canvas
                     // The compositor restarted while zoomed out: new pictures, where the old were.
                     RemakePictures();
                     pictures.Attach(Stack());
+                    pictures.SetDesktop(settings.Wallpaper ? monitor : null);
                     Relayout();
                 }
                 if (active && !gliding && animation == null) Redraw(); // the Desktops panel follows desktop changes
@@ -2232,6 +2353,44 @@ sealed class Canvas
                 Log.Info("display change");
                 DisplaysChanging();
                 return null;
+            // Windows can move windows about while the screen is locked or the displays are off (a
+            // monitor that drops out as it sleeps takes its windows with it). None of that is you,
+            // so nothing is followed until you're back, then everything goes back where it was. As
+            // on the Mac.
+            case WM_WTSSESSION_CHANGE when (int)wParam is WTS_SESSION_LOCK or WTS_SESSION_UNLOCK:
+                screenLocked = (int)wParam == WTS_SESSION_LOCK;
+                if (paused) return 0;
+                if (screenLocked)
+                {
+                    Log.Info("locked: window moves not followed until unlocked");
+                    DisplaysWillChange();
+                }
+                else
+                {
+                    Log.Info("unlocked: re-placing windows");
+                    DisplaysChanging();
+                }
+                return 0;
+            case WM_POWERBROADCAST when (int)wParam == PBT_POWERSETTINGCHANGE:
+            {
+                // POWERBROADCAST_SETTING: the setting's GUID, the data's length, then the data.
+                if (Marshal.PtrToStructure<Guid>(lParam) != GUID_CONSOLE_DISPLAY_STATE) return 1;
+                bool off = Marshal.ReadInt32(lParam + 20) == 0;
+                if (off == displaysOff) return 1;
+                displaysOff = off;
+                if (paused) return 1;
+                if (off)
+                {
+                    Log.Info("displays off: window moves not followed until they're on");
+                    DisplaysWillChange();
+                }
+                else
+                {
+                    Log.Info("displays on: re-placing windows");
+                    DisplaysChanging();
+                }
+                return 1;
+            }
             case WM_DPICHANGED: // the main screen's scaling (the overlay lives on it)
                 Log.Info($"scaling change: {(int)(wParam & 0xFFFF) * 100 / 96}%");
                 DisplaysChanging();

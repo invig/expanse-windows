@@ -66,7 +66,8 @@ sealed class SharedVisualPictures : IPictures
     readonly ID3D11Device d3d;
     readonly IDCompositionDesktopDevice device;
     readonly IDCompositionTarget target;
-    readonly IDCompositionVisual2 root, canvas, titles;
+    readonly IDCompositionVisual2 root, desktop, canvas, titles;
+    Picture? desktopPicture;
     readonly Strips accent, marqueeFill, guides;
     readonly Dictionary<nint, MarkLayer> markLayers = new();
     IDCompositionSurface? closeSurface;
@@ -132,6 +133,8 @@ sealed class SharedVisualPictures : IPictures
         device.CreateTargetForHwnd(dest, true, out target);
         device.CreateVisual(out root);
         target.SetRoot(root);
+        device.CreateVisual(out desktop);
+        root.AddVisual(desktop, false, null);
         device.CreateVisual(out canvas);
         canvas.SetBitmapInterpolationMode(BitmapInterpolationMode.Linear);
         root.AddVisual(canvas, false, null);
@@ -272,8 +275,38 @@ sealed class SharedVisualPictures : IPictures
         device.Commit();
     }
 
+    /// As the Mac's canvas opens onto a fresh picture of the desktop: what's under the windows
+    /// stays as it was at 100% (icons, and the desktop picture however Windows fits it), not the
+    /// backdrop's copy of the picture.
+    public void SetDesktop(RECT? screen)
+    {
+        if (desktopPicture is Picture old)
+        {
+            desktop.RemoveAllVisuals();
+            Dwm.DwmUnregisterThumbnail(old.Thumb);
+            old.Visual.Dispose();
+            desktopPicture = null;
+        }
+        nint shell = User32.FindWindow("Progman", null);
+        if (screen is not RECT s || shell == 0 || !User32.GetWindowRect(shell, out var r)) return;
+        var props = new DWM_THUMBNAIL_PROPERTIES
+        {
+            dwFlags = Dwm.DWM_TNP_RECTDESTINATION | Dwm.DWM_TNP_RECTSOURCE | Dwm.DWM_TNP_VISIBLE | Dwm.DWM_TNP_OPACITY,
+            rcDestination = new RECT(0, 0, s.Width, s.Height),
+            rcSource = new RECT(s.Left - r.Left, s.Top - r.Top, s.Right - r.Left, s.Bottom - r.Top),
+            opacity = 255,
+            fVisible = 1,
+        };
+        int hr = DwmpCreateSharedThumbnailVisual(dest, shell, 2, ref props, device.NativePointer, out nint visual, out nint thumb);
+        if (hr != 0 || visual == 0) { Log.Info($"pictures: no picture of the desktop (0x{hr:X8})"); return; }
+        var v = new IDCompositionVisual2(visual);
+        desktop.AddVisual(v, false, null);
+        desktopPicture = new Picture(v, thumb);
+    }
+
     public void Detach()
     {
+        SetDesktop(null);
         canvas.RemoveAllVisuals();
         titles.RemoveAllVisuals();
         accent.Set([]);

@@ -96,7 +96,8 @@ start it with Windows.
 
 **Virtual desktops** each have their windows on the canvas while they're the one you're on. The
 **Desktops** panel next to the minimap, at the bottom of the screen, has a tile for each: click
-one to go there, or use <kbd>Win</kbd> + <kbd>Ctrl</kbd> + arrows as usual.
+one to go there (the one you're on goes back to 100%), or use <kbd>Win</kbd> + <kbd>Ctrl</kbd> +
+arrows as usual.
 
 **Maximised windows** are screen-sized windows on the canvas. Expanse lets go of the maximise to
 move one out of view, and maximises it again when you come back to it.

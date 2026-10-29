@@ -12,14 +12,19 @@ for DirectComposition and Direct2D. Nothing is injected into other apps.
   just past an edge of the main screen with no monitor beyond it.
 - **Zoomed out** a full-screen, topmost overlay rises with a live picture of every window, first
   exactly over the real windows, then animated out (ease-out cubic, 0.22 s; scale interpolated in
-  log space, as on the Mac).
+  log space, as on the Mac). Under them is a live picture of the desktop itself, as the Mac's
+  canvas opens onto a fresh picture of it: its icons, and the desktop picture however Windows fits
+  it, so the overlay rising changes nothing under the windows.
+- **A scroll at 100% snaps when it stops** (a 250 ms pause: a wheel's turns don't say when a scroll
+  ends): the view moves on by the least that leaves at least one window whole and the fewest cut
+  off by the edges of the work area, lining a window's edge up a gap in. At most half a screen.
 - **The pictures are DWM shared thumbnail visuals:** DirectComposition visuals that DWM, Windows'
   compositor, fills with each window, in a visual tree over the overlay. Each sits at its canvas
   spot inside one canvas visual, so the camera is a single transform per frame. Expanse never
   copies a window's pixels. The API is undocumented (dwmapi #147, see
   [ADeltaX](https://github.com/ADeltaX)); if it's missing or fails, Expanse falls back to
   documented DWM thumbnails, one call per picture per frame. `Expanse.exe --pictures dwm` forces
-  the fallback.
+  the fallback, which draws the backdrop's own copy of the desktop picture, from its file.
 - **Expanse's own UI is in the same tree, over the pictures:** titles (Direct2D/DirectWrite, drawn
   once per text), the hover and selection rings and close buttons (each in its picture's place in
   the stack, so a window in front covers them), the marquee, snapping guides, the minimap and the
@@ -61,6 +66,10 @@ for DirectComposition and Direct2D. Nothing is injected into other apps.
   cloaked, so they leave the canvas and come back to their spots.
 - **Monitors.** The canvas is the main monitor's. A window only on another monitor is left alone;
   one moved onto the main screen joins the canvas.
+- **Locking and sleep.** While the screen is locked (`WTSRegisterSessionNotification`) or the
+  displays are off (`GUID_CONSOLE_DISPLAY_STATE`), window moves aren't followed: a monitor that
+  drops out as it sleeps takes its windows with it, and the Mac once had macOS pile every parked
+  window at one spot at the lock screen. Once you're back, every window goes back where it was.
 
 ## Screens of every size
 
@@ -89,6 +98,9 @@ The layout maths is a line-for-line port of the Mac app's, in `src/Layout`, with
 quit), up to three snapshots 15 or more minutes apart in `Snapshots\` for Restore Layout,
 `settings.json`, `originals.json` (where windows were before Expanse moved them, so quitting, or
 the next start after a crash, puts them back), and with Detailed Logging, `expanse.log`.
+
+Restore Layout puts every window it knows exactly where the snapshot had it when the snapshot was
+taken on a screen of this size; on another, it fits the snapshot's home spots to this one.
 
 Windows are matched to saved spots by the same window while its app keeps running, then by app and
 title (titles are stored only as hashes), then by app; a window under a quarter of a saved one's

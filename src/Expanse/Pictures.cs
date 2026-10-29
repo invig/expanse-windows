@@ -28,6 +28,10 @@ interface IPictures : IDisposable
 
     void Detach();
 
+    /// The real desktop under every picture (its picture as Windows draws it, and its icons), live,
+    /// over `screen`; none with null, or where the pictures can't go over it (see SharedVisualPictures).
+    void SetDesktop(RECT? screen);
+
     /// Positions every picture for `camera` (view = the overlay's client area).
     void Layout(IReadOnlyList<CanvasWindow> windows, Camera camera, RectD view);
 
@@ -115,6 +119,10 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     readonly Dictionary<nint, Picture> pictures = new();
 
     public string Name => "dwm-thumbnails";
+
+    /// DWM draws its thumbnails over everything, so one of the desktop would cover the titles and
+    /// rings on the backdrop: the backdrop's own copy of the desktop picture shows.
+    public void SetDesktop(RECT? screen) { }
     public bool Lost => false; // DWM's own: registered afresh on each Attach
     public int Count => pictures.Count;
 

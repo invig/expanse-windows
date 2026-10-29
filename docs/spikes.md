@@ -296,3 +296,19 @@ backend, with 10 windows, in the same session:
     screen moves nothing; Win+Left's size is kept through a smaller screen; Alt+F4 leaves the view
     where it was; Ctrl+N in Explorer puts the new window beside you. Not tested: the loading box
     (no app here shows one). Not ported: the Mac's capture-service back-offs (macOS only).
+11. **The Mac's 0.1.29 and 0.1.30** (29 Oct). Ported: a scroll at 100% snaps when it stops (the
+    Mac's `snappedCamera`, measured against the work area; a 250 ms pause ends a wheel's scroll);
+    window moves aren't followed while the screen is locked or the displays are off, and every
+    window goes back where it was after; Restore Layout keeps the snapshot's home spots and, on the
+    screen it was taken on, its exact positions; this desktop's tile goes back to 100%; and the
+    canvas opens onto a live picture of the real desktop (a shared visual of Progman under the
+    pictures), not the desktop picture drawn from its file, so icons stay and the picture is
+    fitted as Windows fits it. Not needed: clickable desktop icons (clicks always went through
+    here; only a click on empty desktop zooms out) and the see-through backdrop at 100% (there's
+    no overlay at 100% here); a window restored from the taskbar after the view moved away was
+    already glided to (the Mac's ⌘-Tab after hiding). Tested in the VM: the display going off
+    (SC_MONITORPOWER) and on is noticed and moves nothing; the lock is noticed; a restore after
+    Tidy Up gives back all six frames and home spots exactly; two wheel notches on a tidied layout
+    snap by 95 and 64 px, lining Notepad and Terminal up a gap in (on an untidy layout, with
+    windows 7 px apart, the Mac's scoring prefers pushing most windows out of sight: 893 px); the
+    desktop picture costs nothing measurable (63 fps, p95 17 ms).
