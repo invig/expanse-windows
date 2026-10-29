@@ -4,7 +4,7 @@
     <AssemblyName>Expanse</AssemblyName>
     <RootNamespace>Expanse</RootNamespace>
     <ApplicationIcon>Expanse.ico</ApplicationIcon>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
   </PropertyGroup>
   <!-- scripts/release.sh builds with ExpanseRelease=true: a release, which updates itself. -->
   <ItemGroup Condition="'$(ExpanseRelease)' == 'true'">
