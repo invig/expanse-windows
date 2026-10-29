@@ -279,3 +279,20 @@ backend, with 10 windows, in the same session:
    is private or has none). Not tested: the x64 build on an x64 PC, the tray's Check for Updates
    dialogs (the same code as `ctl update`), and installing from a folder you can't write to (it
    opens the release page instead).
+10. **The Mac's 0.1.26 to 0.1.28** (29 Oct), and the display-change rework from 0.1.22 that the
+    port had missed: the layout fixtures were from before it, so the Windows port's `derive` and
+    `freeSpot` had drifted from the Mac's (77 and 24 cases) while its tests still passed. The oracle
+    now extracts the Mac's anchors (`anchor`, `anchors`, `isNearest`, `anchorCandidates`) and `cap`
+    too, with cases where capping to a smaller screen evens out widths (the column tie); all 13,196
+    cases match. On top: home spots from neighbours (`HomeSpot`, `RehomeStrays`), fits that move
+    windows only by the screen change (`FitPush`, the fitted size saved in layout.json), one 16 px
+    margin applied only to windows bigger than the screen, sizes from Snap and shortcuts (a resize
+    right after your click or key in that app, not Expanse's), saved spots only at launch or for an
+    app that just started, an app's loading box centred on its window's spot, and the view staying
+    put when Windows focuses the next window after a close or minimise. "Input" is a click (the
+    mouse hook) or other input that wasn't the mouse's (GetLastInputInfo), so pointer moves don't
+    count, as on the Mac; the first 300 ms after a close are the closing key being let go. Tested in
+    the VM: a 1440x900 → 1024x640 → 1440x900 round trip comes back exactly; a restart on the same
+    screen moves nothing; Win+Left's size is kept through a smaller screen; Alt+F4 leaves the view
+    where it was; Ctrl+N in Explorer puts the new window beside you. Not tested: the loading box
+    (no app here shows one). Not ported: the Mac's capture-service back-offs (macOS only).

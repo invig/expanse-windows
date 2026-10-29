@@ -27,6 +27,13 @@ sealed class DesktopInput : IDisposable
     /// Set by the canvas: at 100%, running, so the desktop's input is Expanse's to use.
     public volatile bool Armed;
 
+    /// When the last button went down, and the last mouse event of any kind, in the input's own
+    /// time (GetTickCount, as GetLastInputInfo): for telling clicks and key presses from the pointer
+    /// moving (see Canvas.InputSince).
+    public uint LastButtonDown => (uint)Interlocked.CompareExchange(ref lastButtonDown, 0, 0);
+    public uint LastMouseEvent => (uint)Interlocked.CompareExchange(ref lastMouseEvent, 0, 0);
+    int lastButtonDown, lastMouseEvent;
+
     delegate nint HookProc(int code, nint wParam, nint lParam);
     [DllImport("user32.dll", SetLastError = true)] static extern nint SetWindowsHookEx(int id, HookProc proc, nint module, uint thread);
     [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(nint hook);
@@ -56,6 +63,12 @@ sealed class DesktopInput : IDisposable
 
     nint Hook(int code, nint wParam, nint lParam)
     {
+        if (code >= 0)
+        {
+            var m = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+            Interlocked.Exchange(ref lastMouseEvent, (int)m.time);
+            if ((uint)wParam is WM_LBUTTONDOWN or WM_RBUTTONDOWN or WM_MBUTTONDOWN) Interlocked.Exchange(ref lastButtonDown, (int)m.time);
+        }
         if (code >= 0 && Armed)
         {
             var m = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);

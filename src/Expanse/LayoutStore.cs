@@ -18,6 +18,10 @@ sealed class SavedLayout
     public bool HandOver { get; set; }
     /// The main screen's DPI it was saved at (0: not recorded). Spots and sizes are in its pixels.
     public uint Dpi { get; set; }
+    /// The work area the layout was fitted to: at launch, windows only move by however much the
+    /// screen differs (see Canvas.FitLayoutToScreen).
+    public double? FittedWidth { get; set; }
+    public double? FittedHeight { get; set; }
     public List<SavedWindow> Windows { get; set; } = new();
 }
 
@@ -84,6 +88,8 @@ static class LayoutStore
         if (layout.Dpi == 0 || layout.Dpi == dpi) { layout.Dpi = dpi; return; }
         double r = (double)dpi / layout.Dpi;
         foreach (var e in layout.Windows) Scale(e, new Vec(layout.CenterX, layout.CenterY), r);
+        if (layout.FittedWidth is double fw && layout.FittedHeight is double fh)
+            (layout.FittedWidth, layout.FittedHeight) = (Layout.Round(fw * r), Layout.Round(fh * r));
         Log.Info($"layout: saved at {layout.Dpi * 100 / 96}% scaling, now {dpi * 100 / 96}%: scaled by {r:0.###}");
         layout.Dpi = dpi;
     }
@@ -179,7 +185,9 @@ static class LayoutStore
         int i = pool.FindIndex(e => e.Hwnd == w.Hwnd && e.Pid == w.Pid && SameApp(e, w));
         if (i < 0)
         {
-            bool Free(SavedWindow e) => !open.Contains((e.Hwnd, e.Pid)) && !Exists(e.Hwnd, e.Pid);
+            // A window far smaller than an entry (an update or loading box, a small dialog) doesn't
+            // take it: the app's main window, a moment later, does (see LargerSpot).
+            bool Free(SavedWindow e) => !open.Contains((e.Hwnd, e.Pid)) && !Exists(e.Hwnd, e.Pid) && !TooSmall(w.Frame.Size, e);
             string key = TitleKey(w.Title);
             i = pool.FindIndex(e => SameApp(e, w) && e.Title == key && Free(e));
             if (i < 0) i = pool.FindIndex(e => SameApp(e, w) && Free(e));
@@ -189,6 +197,15 @@ static class LayoutStore
         pool.RemoveAt(i);
         return match;
     }
+
+    /// A free entry of the app's that `w` is too small to take (see TakeMatch): the window it's
+    /// standing in for while the app starts up. Left in the pool.
+    public static SavedWindow? LargerSpot(CanvasWindow w, ISet<(long, uint)> open, List<SavedWindow> pool) =>
+        pool.FirstOrDefault(e => SameApp(e, w) && TooSmall(w.Frame.Size, e) && !open.Contains((e.Hwnd, e.Pid)) && !Exists(e.Hwnd, e.Pid));
+
+    /// Under a quarter of the entry's area: not the same window coming back.
+    static bool TooSmall(SizeD size, SavedWindow e) =>
+        (e.PW ?? e.W) is double w && (e.PH ?? e.H) is double h && w > 0 && h > 0 && size.W * size.H < 0.25 * w * h;
 
     static bool SameApp(SavedWindow e, CanvasWindow w) =>
         string.Equals(e.App, w.AppPath, StringComparison.OrdinalIgnoreCase) && e.Class == w.Class;

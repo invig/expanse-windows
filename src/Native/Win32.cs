@@ -239,7 +239,7 @@ public static class User32
 
     public const uint WM_DESTROY = 0x2, WM_PAINT = 0xF, WM_CLOSE = 0x10, WM_QUIT = 0x12, WM_ERASEBKGND = 0x14,
         WM_SETCURSOR = 0x20, WM_MOUSEACTIVATE = 0x21, WM_KEYDOWN = 0x100, WM_SYSKEYDOWN = 0x104, WM_TIMER = 0x113,
-        WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204,
+        WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, WM_MBUTTONDOWN = 0x207,
         WM_MOUSEWHEEL = 0x20A, WM_HOTKEY = 0x312, WM_DISPLAYCHANGE = 0x7E, WM_DPICHANGED = 0x2E0,
         WM_NCHITTEST = 0x84, WM_ACTIVATE = 0x6, WM_SYSCOMMAND = 0x112, WM_APP = 0x8000;
     public const int SC_KEYMENU = 0xF100;
@@ -329,6 +329,8 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetSystemMetrics(int index);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetProcessDpiAwarenessContext(nint ctx);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetCursorPos(out POINT p);
+    [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize, dwTime; }
+    [DllImport(Dll)] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint SetCapture(nint hwnd);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool ReleaseCapture();
     public const uint WM_CAPTURECHANGED = 0x0215;
@@ -527,6 +529,16 @@ public static class Shell32
 public static class Kernel32
 {
     const string Dll = "kernel32.dll";
+    [DllImport(Dll)] public static extern bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
+
+    /// When a process started, if it can be asked.
+    public static DateTime? Started(uint pid)
+    {
+        nint process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (process == 0) return null;
+        try { return GetProcessTimes(process, out long created, out _, out _, out _) ? DateTime.FromFileTimeUtc(created) : null; }
+        finally { CloseHandle(process); }
+    }
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetModuleHandle(string? name);
     [DllImport(Dll)] public static extern uint GetCurrentThreadId();
     [DllImport(Dll)] public static extern uint GetCurrentProcessId();

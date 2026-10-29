@@ -31,9 +31,12 @@ built and tested):
 - **Tidy Up** (<kbd>T</kbd> zoomed out, or the tray menu) tidies each group of windows where it is:
   overlaps pushed apart, edges that nearly line up lined up, gaps closed to 20 px. Everything glides
   to its new spot.
-- **New windows open in free space** next to the window you were in (right, below, left, then above),
-  as on the Mac; the view glides there if that's off screen. A window coming back from being
-  minimised goes back to its own spot.
+- **New windows open in free space** next to the window you were in (right, below, left, and above
+  only when there's nothing nearer), as on the Mac; the view glides there if that's off screen. A
+  window coming back from being minimised goes back to its own spot; an app opening again gets its
+  windows' saved spots (its loading box goes in the middle of the main window's, not in it), but a
+  window an app opens later (a new Explorer window) is a new one, beside you. Closing or
+  minimising the window you're in doesn't send the view to whichever window Windows focuses next.
 - **Getting around zoomed out**, as on the Mac: the mouse wheel (or a touchpad's two-finger
   scroll) pans, sideways with <kbd>Shift</kbd> or a tilt wheel; <kbd>Ctrl</kbd>+wheel (or a pinch)
   zooms around the pointer; or hold <kbd>Space</kbd> and drag. <kbd>0</kbd> fits every window,
@@ -80,15 +83,17 @@ built and tested):
   while its app keeps running, then by app and title, then by app. Titles are stored only as
   hashes.
 - **At home on any screen size.** Each window keeps a home spot (its place in the full-size
-  layout) and the size you chose (by dragging an edge). When the screen changes (resolution,
-  scale, taskbar), the layout is fitted from home:
-  - sizes go back to what you chose, capped at the screen;
-  - positions are derived so every gap keeps its size, and only the overlaps the smaller screen
-    caused are pushed apart;
+  layout) and the size you chose (dragging an edge, or Snap, a snap layout or a tool like
+  FancyZones). When the screen changes (resolution, scale, taskbar), the layout is fitted from home:
+  - sizes go back to what you chose, capped at the screen (one sized to fill it keeps filling it);
+  - positions are derived so every gap keeps its size, and a window in a column stays lined up
+    with the one above; only the overlaps the smaller screen caused are pushed apart;
+  - each window moves only as far as the change moves it, so a round trip between two screens
+    comes back exactly, and Expanse starting again on the same screen moves nothing;
   - the window you were in goes in the middle.
 
-  A smaller screen tightens the layout; going back puts it back exactly. Moves you make on the
-  smaller screen carry over. Tidy Up tidies the home layout and caps window sizes too.
+  Windows opened or moved on the smaller screen get a home spot from their neighbours, so they
+  carry over too. Tidy Up tidies the home layout and caps window sizes too.
 - **Scaling changes** (Settings > Display > Scale) work like a change of screen size, as on the Mac:
   the canvas grows or shrinks by the same ratio, so windows keep their size relative to what's in
   them (Windows resizes most, and Expanse resizes the ones it doesn't), then the layout is fitted.

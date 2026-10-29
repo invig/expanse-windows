@@ -28,8 +28,13 @@ sealed class CanvasWindow
     /// Where it sits in the home layout: the arrangement at full chosen sizes (the big screen). On
     /// a smaller screen the canvas is derived from it, so it comes back exactly.
     public Vec? Home;
+    /// How far the last fit pushed it to clear an overlap (see Canvas.FitLayoutToScreen).
+    public Vec FitPush;
     /// The size Expanse last gave it, so our resizes aren't taken for yours.
     public SizeD? LastSized;
+    /// When Expanse last resized it (Environment.TickCount64): an app catching up with that isn't
+    /// you choosing a size.
+    public long LastSizedAt;
 
     /// You maximised it. Windows holds a maximised window to the screen (moving it does nothing),
     /// so on the canvas it's a window the size of the work area: maximised while the camera has

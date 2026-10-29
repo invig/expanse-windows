@@ -230,7 +230,12 @@ sealed class Canvas
                     // A VM or remote-screen window: the size its app gives it is the size chosen.
                     if (w.SizesItself && !suspendTracking && size != w.Preferred) w.Preferred = size;
                     bool ours = w.LastSized is SizeD l && Math.Abs(l.W - size.W) < 2 && Math.Abs(l.H - size.H) < 2;
-                    if (userSized.Contains(h) && !ours && !suspendTracking && size != w.Preferred)
+                    // Dragging an edge, or a resize right after your click or key press in the window's
+                    // app (Snap from Win+arrows or a snap layout, a tool like FancyZones, an app's own
+                    // zoom) that Expanse didn't cause: the size you chose. Maximising isn't a size.
+                    bool yours = userSized.Contains(h) || (!zoomed && InputSince(Environment.TickCount64 - 1500)
+                        && Environment.TickCount64 - w.LastSizedAt > 2000 && ForegroundPid() == w.Pid);
+                    if (yours && !ours && !suspendTracking && size != w.Preferred)
                     {
                         Log.Info($"window {w}: you chose {size.W:0}x{size.H:0}");
                         w.Preferred = size;
@@ -375,6 +380,8 @@ sealed class Canvas
         saved = LayoutStore.Load();
         if (saved != null) LayoutStore.ToDpi(saved, dpi);
         canvasDpi = dpi;
+        // Saved windows go back where you last saw them, moved only if this screen differs.
+        if (fittedView == null && saved?.FittedWidth is double fw && saved.FittedHeight is double fh) fittedView = new SizeD(fw, fh);
         savedPool = saved?.Windows.ToList() ?? new();
         if (saved != null)
         {
@@ -386,7 +393,7 @@ sealed class Canvas
         var open = OpenKeys();
         int restored = windows.Count(w => TakeSavedSpot(w, open));
         // Saved on another screen, perhaps: fitted to this one from the home layout.
-        if (restored > 0) FitLayoutToScreen(ScreenMargin, tidy: false);
+        if (restored > 0) FitLayoutToScreen(tidy: false, rederiving: new HashSet<nint>());
         int moved = Commit();
         Log.Info(saved == null ? "no saved layout" : $"saved layout: {restored} of {windows.Count} windows back at their spots ({moved} moved)");
         initialSyncDone = true;
@@ -427,6 +434,7 @@ sealed class Canvas
         {
             CenterX = camera.Center(ViewSize).X, CenterY = camera.Center(ViewSize).Y, CleanExit = cleanExit, HandOver = handOver,
             Dpi = canvasDpi,
+            FittedWidth = fittedView?.W, FittedHeight = fittedView?.H,
             Windows = windows.Concat(departed.Values.Where(w => IsWindow(w.Hwnd))).Select(LayoutStore.Entry)
                 .Concat(savedPool.Take(60)).ToList(),
         };
@@ -449,12 +457,9 @@ sealed class Canvas
     /// (a terminal to whole character cells): that's still the chosen size, not one shrunk for a
     /// smaller screen. Shrinking to fit a screen takes far more.
     const double AppRounding = 32;
-    /// The gap kept around a window that would otherwise fill the screen.
-    const double ScreenMargin = 16;
-
     /// True while the canvas is a tightened version of the home layout: some window is smaller
     /// than its chosen size because this screen is smaller.
-    bool IsDerived => windows.Any(w => !w.Maximised && w.Preferred.W > 0 &&
+    bool IsDerived => windows.Any(w => !w.Maximised && !w.SizesItself && w.Preferred.W > 0 &&
         (w.Frame.W < w.Preferred.W - AppRounding || w.Frame.H < w.Preferred.H - AppRounding));
 
     /// While no window is shrunk for a smaller screen, the canvas layout is the home layout. Not
@@ -465,28 +470,140 @@ sealed class Canvas
     }
 
     /// You moved a window (dragging its picture, or for real). On the big screen its new spot is
-    /// its home spot, straight away; on a smaller one the home spot moves by as much, so the move
-    /// survives going back to the big screen.
+    /// its home spot, straight away: anything that fits the layout from home spots before the next
+    /// save (Tidy Up, a window coming back) would otherwise put it back. On a smaller screen its
+    /// home spot keeps the gaps it now has to its neighbours (see HomeSpot), so the move survives
+    /// going back to the big screen.
     void NoteUserMove(CanvasWindow w, Vec before)
     {
-        if (suspendTracking) return;
-        if (!IsDerived) { w.Home = w.Frame.Origin; return; }
-        var home = w.Home ?? before;
-        w.Home = new Vec(home.X + w.Frame.X - before.X, home.Y + w.Frame.Y - before.Y);
+        // Where you put it is where it goes: no push left for the next fit to take back.
+        w.FitPush = default;
+        if (!IsDerived)
+        {
+            if (!suspendTracking) w.Home = w.Frame.Origin;
+            return;
+        }
+        int i = windows.IndexOf(w);
+        if (i >= 0) w.Home = HomeSpot(i, windows.Select(FittedFrame).ToArray());
+    }
+
+    /// The work area the layout was last fitted to (see FitLayoutToScreen); none before the first.
+    SizeD? fittedView;
+    SizeD WorkSize => new(work.Width, work.Height);
+
+    /// A window's size in the home layout: the size you chose, or for one that sizes itself (a VM)
+    /// or is maximised, the size it is.
+    static SizeD HomeSize(CanvasWindow w) => w.SizesItself || w.Maximised || w.Preferred.W <= 0 ? w.Frame.Size : w.Preferred;
+
+    /// The size fitting gives a window on a work area of `view`: the size you chose, capped at it.
+    static SizeD FittedSize(CanvasWindow w, SizeD view) =>
+        w.SizesItself || w.Maximised ? w.Frame.Size : Layout.Cap(w.Preferred.W > 0 ? w.Preferred : w.Frame.Size, view);
+
+    /// Where the last fit had the window, before pushing it clear of overlaps, at the size that fit
+    /// gave it: Windows squeezing windows during a display change doesn't count.
+    RectD FittedFrame(CanvasWindow w)
+    {
+        var size = fittedView is SizeD v ? FittedSize(w, v) : w.Frame.Size;
+        return new RectD(w.Frame.X - w.FitPush.X, w.Frame.Y - w.FitPush.Y, size.W, size.H);
+    }
+
+    RectD[] HomeFrames(IReadOnlyList<RectD> here) => windows.Select((w, j) =>
+    {
+        var o = w.Home ?? here[j].Origin;
+        var size = HomeSize(w);
+        return new RectD(o.X, o.Y, size.W, size.H);
+    }).ToArray();
+
+    /// A home spot for window `i` that puts it back where it is here (`here`, see FittedFrame): it
+    /// keeps what Layout.Derive keeps (see Layout.AnchorOf), measured here and applied to the
+    /// anchor's home spot. The inverse of Derive, for a window whose canvas spot came from this
+    /// screen rather than from the home layout.
+    Vec HomeSpot(int i, IReadOnlyList<RectD> here)
+    {
+        var home = HomeFrames(here);
+        // Along x; for y the same, transposed. Of equally near windows (two stacked with their
+        // right edges lined up here, say), the one that puts it furthest along: clear of all of
+        // them at home, where they may differ in size.
+        double Along(IReadOnlyList<RectD> hereF, IReadOnlyList<RectD> homeF)
+        {
+            var r = hereF[i];
+            var spots = Layout.Anchors(i, hereF).Select(a => a.Edge
+                ? homeF[a.Index].X + r.X - hereF[a.Index].X
+                : homeF[a.Index].Right + r.X - hereF[a.Index].Right).ToList();
+            return Layout.Round(spots.Count > 0 ? spots.Max() : r.X);
+        }
+        return new Vec(Along(here, home), Along(here.Select(r => r.Transposed).ToArray(), home.Select(r => r.Transposed).ToArray()));
+    }
+
+    /// Windows whose home spot doesn't explain where they are: opened while the screen was smaller
+    /// (no home spot yet), left where they were when a window beside them closed (the layout would
+    /// close up around it), moved before home spots followed neighbours, or overlapping a window
+    /// in the home layout that they're clear of here. A bigger screen would move them by the wrong
+    /// amount, or leave them where they are while their neighbours grow over them. Each gets a home
+    /// spot from its neighbours here instead (see HomeSpot), so it moves along with them.
+    void RehomeStrays()
+    {
+        var here = windows.Select(FittedFrame).ToArray();
+        var hereT = here.Select(r => r.Transposed).ToArray();
+        var sizes = windows.Select(w => fittedView is SizeD v ? FittedSize(w, v) : w.Frame.Size).ToArray();
+        var rehomed = new HashSet<int>();
+        // A new home spot can change which windows another one is anchored to, so again until
+        // nothing changes (a few rounds at most).
+        for (int round = 0; round < 4; round++)
+        {
+            var home = HomeFrames(here);
+            var strays = round == 0 ? Enumerable.Range(0, windows.Count).Where(k => windows[k].Home == null).ToHashSet() : new HashSet<int>();
+            for (int i = 0; i < windows.Count; i++)
+                for (int j = i + 1; j < windows.Count; j++)
+                {
+                    if (!home[i].Inset(0.5, 0.5).Intersects(home[j]) || here[i].Inset(0.5, 0.5).Intersects(here[j])) continue;
+                    // The one below (or, side by side, on the right) is the one out of place.
+                    bool stacked = here[i].Bottom <= here[j].Y + 0.5 || here[j].Bottom <= here[i].Y + 0.5;
+                    strays.Add(stacked ? (here[j].Y > here[i].Y ? j : i) : (here[j].X > here[i].X ? j : i));
+                }
+            var derived = Layout.Derive(home, sizes);
+            var homeT = home.Select(r => r.Transposed).ToArray();
+            for (int i = 0; i < windows.Count; i++)
+                if (derived[i].DistanceTo(here[i].Origin) >= 1
+                    || !Layout.IsNearest(Layout.AnchorOf(i, home), i, here)
+                    || !Layout.IsNearest(Layout.AnchorOf(i, homeT), i, hereT))
+                    strays.Add(i);
+            // Left to right and top to bottom, so a stray next to another stray measures from its
+            // new spot; twice, for one anchored to a stray further on.
+            var order = strays.OrderBy(k => here[k].X).ThenBy(k => here[k].Y).ToList();
+            bool changed = false;
+            for (int pass = 0; pass < 2; pass++)
+                foreach (int i in order)
+                {
+                    var spot = HomeSpot(i, here);
+                    if (windows[i].Home is Vec h && h.DistanceTo(spot) < 1) continue;
+                    windows[i].Home = spot;
+                    rehomed.Add(i);
+                    changed = true;
+                }
+            if (!changed) break;
+        }
+        if (rehomed.Count > 0) Log.Info($"re-homed {rehomed.Count} windows: {string.Join(", ", rehomed.Order().Select(k => windows[k]))}");
     }
 
     /// Fit the layout to this screen without rebuilding it (the Mac's fitLayoutToScreen). Sizes:
-    /// what you chose, capped at the screen. Positions: the home layout, tightened by however much
-    /// windows shrank, so every gap keeps its size (Layout.Derive); on the big screen that's the
-    /// home layout exactly. Only overlaps this screen caused are pushed apart. With `tidy`, the
-    /// home layout itself is tidied first (Layout.TidyUp).
-    void FitLayoutToScreen(double margin, bool tidy)
+    /// what you chose, capped at the work area. Positions: the home layout, tightened by however
+    /// much windows shrank, so every gap (inside groups and between them) keeps its size
+    /// (Layout.Derive); on the big screen that's the home layout exactly. With `tidy`, the home
+    /// layout itself is tidied first (Layout.TidyUp).
+    /// `rederiving`: the windows placed from their home spots; null for all of them. The rest keep
+    /// where you see them, moved only as far as the screen change since the last fit moves their
+    /// spot in the derived layout. Re-deriving everything would also undo whatever the layout
+    /// picked up since then (windows opening and closing change the derived layout), and every
+    /// window would jump.
+    void FitLayoutToScreen(bool tidy, IReadOnlySet<nint>? rederiving = null)
     {
-        var max = new SizeD(work.Width - margin * 2, work.Height - margin * 2);
+        RehomeStrays();
+        var view = WorkSize;
         var home = windows.Select(w =>
         {
             var o = w.Home ?? w.Frame.Origin;
-            var size = w.Preferred.W > 0 && !w.Maximised ? w.Preferred : w.Frame.Size;
+            var size = HomeSize(w);
             return new RectD(o.X, o.Y, size.W, size.H);
         }).ToArray();
         if (tidy)
@@ -495,35 +612,58 @@ sealed class Canvas
             for (int i = 0; i < windows.Count; i++) windows[i].Home = new Vec(Layout.Round(home[i].X), Layout.Round(home[i].Y));
         }
         // Maximised windows are the size Windows gives them (see Place).
-        foreach (var w in windows.Where(w => !w.Maximised))
+        foreach (var w in windows.Where(w => !w.Maximised && !w.SizesItself))
         {
             var chosen = w.Preferred.W > 0 ? w.Preferred : w.Frame.Size;
-            var target = new SizeD(Layout.Round(Math.Min(chosen.W, max.W)), Layout.Round(Math.Min(chosen.H, max.H)));
+            var target = Layout.Cap(chosen, view);
             if (Math.Abs(target.W - w.Frame.W) <= 1 && Math.Abs(target.H - w.Frame.H) <= 1) continue;
             var actual = ResizeReal(w, target);
             Log.Info($"fit size {w} {w.Frame.W:0}x{w.Frame.H:0} -> {actual.W:0}x{actual.H:0}");
             // Asked for the size you chose and the app came as close as it goes: that's the chosen
             // size from now on, rather than asking again at every fit.
-            if (chosen.W <= max.W && chosen.H <= max.H &&
+            if (chosen.W <= view.W && chosen.H <= view.H &&
                 Math.Abs(actual.W - target.W) <= AppRounding && Math.Abs(actual.H - target.H) <= AppRounding)
                 w.Preferred = actual;
             w.Frame = w.Frame with { W = actual.W, H = actual.H };
         }
-        // A little off its home size is an app rounding, not a smaller screen: counted as home,
-        // or the windows beyond it would creep every time the screen changes.
+        // A little off its home size, when that fits the screen, is an app rounding, not a smaller
+        // screen: counted as home, or the windows beyond it would creep every time the screen changes.
         var sizes = windows.Select((w, i) =>
-            Math.Abs(w.Frame.W - home[i].W) <= AppRounding && Math.Abs(w.Frame.H - home[i].H) <= AppRounding
+            home[i].W <= view.W && home[i].H <= view.H
+            && Math.Abs(w.Frame.W - home[i].W) <= AppRounding && Math.Abs(w.Frame.H - home[i].H) <= AppRounding
                 ? home[i].Size : w.Frame.Size).ToList();
         var origins = Layout.Derive(home, sizes);
+        if (rederiving != null && !tidy && fittedView is SizeD last)
+        {
+            // Worked out from the screen sizes rather than measured, so a round trip between two
+            // screens comes back exactly. Last fit's push apart is taken back first: on this
+            // screen there may be no overlap to push.
+            var before = Layout.Derive(home, windows.Select(w => FittedSize(w, last)).ToList());
+            var after = Layout.Derive(home, windows.Select(w => FittedSize(w, view)).ToList());
+            for (int i = 0; i < windows.Count; i++)
+            {
+                var w = windows[i];
+                if (rederiving.Contains(w.Hwnd)) continue;
+                origins[i] = new Vec(w.Frame.X - w.FitPush.X + after[i].X - before[i].X,
+                                     w.Frame.Y - w.FitPush.Y + after[i].Y - before[i].Y);
+            }
+        }
         var frames = origins.Select((o, i) => new RectD(o.X, o.Y, windows[i].Frame.W, windows[i].Frame.H)).ToArray();
-        // Windows you have overlapping in the home layout stay that way (pushing them apart would
-        // push everything below and to the right too, and stick on the big screen).
+        // Only overlaps this screen caused, pushed apart to the standard gap. Windows you have
+        // overlapping in the home layout stay that way (pushing them apart would push everything
+        // below and to the right too, and the move would stick when you're back on the big screen).
         Layout.Separate(frames, Layout.Gap, onlyOverlaps: true, keep: Layout.OverlappingPairs(home));
+        for (int i = 0; i < windows.Count; i++) windows[i].FitPush = new Vec(frames[i].X - origins[i].X, frames[i].Y - origins[i].Y);
+        fittedView = view;
         int moved = 0;
         for (int i = 0; i < windows.Count; i++)
         {
             var o = new Vec(Layout.Round(frames[i].X), Layout.Round(frames[i].Y));
-            if (o.DistanceTo(windows[i].Frame.Origin) >= 1) moved++;
+            if (o.DistanceTo(windows[i].Frame.Origin) >= 1)
+            {
+                moved++;
+                if (tidy) Log.Info($"tidy moved {windows[i]} by {o.X - windows[i].Frame.X:0}, {o.Y - windows[i].Frame.Y:0}");
+            }
             windows[i].Frame = windows[i].Frame with { X = o.X, Y = o.Y };
         }
         Log.Info($"layout fitted: {moved} of {windows.Count} windows moved, derived={IsDerived}");
@@ -533,9 +673,8 @@ sealed class Canvas
     /// before going to it (the Mac's fitToScreen).
     void FitToScreen(CanvasWindow w)
     {
-        if (w.Preferred.W <= 0 || w.Maximised) return;
-        var target = new SizeD(Layout.Round(Math.Min(w.Preferred.W, work.Width - ScreenMargin * 2)),
-                               Layout.Round(Math.Min(w.Preferred.H, work.Height - ScreenMargin * 2)));
+        if (w.Preferred.W <= 0 || w.Maximised || w.SizesItself) return;
+        var target = Layout.Cap(w.Preferred, WorkSize);
         if (Math.Abs(target.W - w.Frame.W) <= 1 && Math.Abs(target.H - w.Frame.H) <= 1) return;
         var actual = ResizeReal(w, target);
         Log.Info($"resize {w} {w.Frame.W:0}x{w.Frame.H:0} -> {actual.W:0}x{actual.H:0}");
@@ -553,6 +692,7 @@ sealed class Canvas
         var f = w.ReadScreenFrame();
         var actual = new SizeD(f.Width, f.Height);
         w.LastSized = actual;
+        w.LastSizedAt = Environment.TickCount64;
         if (active) pictures.Resized(w);
         return actual;
     }
@@ -607,7 +747,7 @@ sealed class Canvas
             // Zoomed out, the layout still fits the new screen (the real windows follow on the way
             // out), but there's no window to centre.
             overlay.Show(monitor, activate: false);
-            FitLayoutToScreen(ScreenMargin, tidy: false);
+            FitLayoutToScreen(tidy: false, rederiving: new HashSet<nint>());
             foreach (var w in windows) PictureMoved(w);
             Relayout();
             screenResized = false;
@@ -620,7 +760,7 @@ sealed class Canvas
     /// if the screen changed size, the window you were in goes in the middle.
     void RestoreSizesAndPlace()
     {
-        FitLayoutToScreen(ScreenMargin, tidy: false);
+        FitLayoutToScreen(tidy: false, rederiving: new HashSet<nint>());
         if (screenResized && (centreAfterResize is CanvasWindow c && windows.Contains(c) ? c
                 : CanvasWindowOf(GetForegroundWindow())) is CanvasWindow w)
         {
@@ -648,11 +788,28 @@ sealed class Canvas
             return;
         }
         if (!initialSyncDone) return;
-        if (TakeSavedSpot(w, OpenKeys()))
+        // Saved spots are for windows coming back: at launch (see Start), or an app's that has just
+        // started (opening again after quitting).
+        bool mayTakeSavedSpot = JustStarted(w.Pid);
+        if (mayTakeSavedSpot && TakeSavedSpot(w, OpenKeys()))
         {
             // An app opened now that had windows last time: quietly back to their spot (focus
             // decides whether the view goes there), as on the Mac.
             Log.Info($"{w} back at its saved spot {w.Frame}");
+            // It comes with the spot and size of the screen it was saved on: fitted to this one,
+            // only it placed from its home spot (the windows already here stay where you see them).
+            FitLayoutToScreen(tidy: false, rederiving: new HashSet<nint> { w.Hwnd });
+            if (!active) Commit();
+            return;
+        }
+        if (mayTakeSavedSpot && LayoutStore.LargerSpot(w, OpenKeys(), savedPool) is SavedWindow spot)
+        {
+            // An app opening again shows a small box first (an update or loading screen): it goes
+            // in the middle of where the app's window was, which the window itself takes when it
+            // comes, so the view doesn't go somewhere else in between.
+            double sw = spot.PW ?? spot.W, sh = spot.PH ?? spot.H;
+            w.Frame = w.Frame with { X = Layout.Round(spot.X + sw / 2 - w.Frame.W / 2), Y = Layout.Round(spot.Y + sh / 2 - w.Frame.H / 2) };
+            Log.Info($"{w} is a small window of an app opening again: centred on its window's spot");
             if (!active) Place(w);
             return;
         }
@@ -749,6 +906,9 @@ sealed class Canvas
             case EVENT_OBJECT_DESTROY:
             case EVENT_OBJECT_CLOAKED:
             case EVENT_SYSTEM_MINIMIZESTART:
+                // Windows then gives focus to the next window in line (see FocusSettled). Some apps
+                // (Notepad) hide a window they're closing first.
+                if (ev != EVENT_OBJECT_CLOAKED && windows.Any(w => w.Hwnd == hwnd)) lastGoneAt = Environment.TickCount64;
                 if (known) ScheduleSync();
                 break;
         }
@@ -795,12 +955,41 @@ sealed class Canvas
     /// What counts is the window in front once focus has settled, not the last event's: a click
     /// on a taskbar button whose window has a dialog up reports the taskbar, then activates the
     /// dialog without an event of its own.
+    /// When a canvas window last went away (closed, hidden or minimised; Environment.TickCount64).
+    long lastGoneAt = -10_000;
+
+    /// A click or key press since `at` (Environment.TickCount64), as on the Mac: the pointer moving
+    /// doesn't count. Clicks come from the mouse hook; any later input that wasn't the mouse's is a
+    /// key (or touch, or a pen).
+    bool InputSince(long at)
+    {
+        uint since = (uint)at;
+        if ((int)(desktopInput.LastButtonDown - since) >= 0 && desktopInput.LastButtonDown != 0) return true;
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        return GetLastInputInfo(ref info) && (int)(info.dwTime - since) >= 0 && info.dwTime != desktopInput.LastMouseEvent;
+    }
+
+    static uint ForegroundPid()
+    {
+        GetWindowThreadProcessId(GetForegroundWindow(), out uint pid);
+        return pid;
+    }
+
+    /// An app whose process started under a minute ago: one opening again, whose windows may take
+    /// their saved spots. A window an app opens later (a new Explorer window, explorer.exe having
+    /// run all along) is a new one, beside where you are.
+    static bool JustStarted(uint pid) => Kernel32.Started(pid) is DateTime t && DateTime.UtcNow - t < TimeSpan.FromMinutes(1);
+
     void FocusSettled()
     {
         nint hwnd = GetForegroundWindow();
         if (paused || active || animation != null || hwnd == 0) return;
-        // Our own hand-back just focused it.
-        if (lastOwnFocus.hwnd == hwnd && Stopwatch.GetElapsedTime(lastOwnFocus.at).TotalSeconds < 1) return;
+        // Our own hand-back just focused it: the window you're in now.
+        if (lastOwnFocus.hwnd == hwnd && Stopwatch.GetElapsedTime(lastOwnFocus.at).TotalSeconds < 1)
+        {
+            if (CanvasWindowOf(hwnd) is CanvasWindow own) lastFocusedWindow = own.Hwnd;
+            return;
+        }
         var w = CanvasWindowOf(hwnd);
         if (w == null || (w.Hwnd != hwnd && w.Owned.All(o => o.Hwnd != hwnd)))
         {
@@ -816,6 +1005,16 @@ sealed class Canvas
         var r = camera.ToView(focused.Frame);
         var screen = View.Inset(-1, -1);
         if (r.X >= screen.X && r.Y >= screen.Y && r.Right <= screen.Right && r.Bottom <= screen.Bottom) return;
+        // The key that closed it (Alt+F4, Ctrl+W) is still being let go for a moment: that's not
+        // you picking another window.
+        if (Environment.TickCount64 - lastGoneAt < 1500 && !InputSince(lastGoneAt + 300))
+        {
+            // You closed (or minimised) a window, and Windows gave focus to the next one in line,
+            // wherever that is. The view stays where you were; going to it looked like a window
+            // reopening.
+            Log.Info($"{focused} got focus after a window went away; the view stays");
+            return;
+        }
         if (viewPlaced && GoesOnScreen(r))
         {
             // Partly on screen, in a view you put there: it's the one you clicked, not one to go to.
@@ -889,7 +1088,7 @@ sealed class Canvas
         // Home spots are otherwise brought up to date when the layout is saved, which windows
         // you've only just moved may still be waiting for: Tidy would put them back.
         HomeFromCanvas();
-        ShowRearranged(() => FitLayoutToScreen(ScreenMargin, tidy: true), "tidy");
+        ShowRearranged(() => FitLayoutToScreen(tidy: true), "tidy");
     }
 
     /// Rearranges the canvas with `arrange` (which sets every window's frame), shown zoomed out:
@@ -935,7 +1134,7 @@ sealed class Canvas
                 if ((e.PW ?? e.W) is double pw && (e.PH ?? e.H) is double ph && pw > 0) w.Preferred = new SizeD(pw, ph);
                 restored++;
             }
-            FitLayoutToScreen(ScreenMargin, tidy: false);
+            FitLayoutToScreen(tidy: false);
         }, "restore layout");
         Log.Info($"restored a layout: {restored} of {windows.Count} windows");
     }
@@ -1686,6 +1885,8 @@ sealed class Canvas
             w.Placed = null;
         }
         foreach (var e in savedPool) LayoutStore.Scale(e, c, r);
+        if (fittedView is SizeD v) fittedView = Z(v);
+        foreach (var w in windows) w.FitPush = w.FitPush * r;
         Log.Info($"scaling {canvasDpi * 100 / 96}% -> {dpi * 100 / 96}%: canvas scaled by {r:0.###}");
     }
 
