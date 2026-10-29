@@ -307,7 +307,8 @@ backend, with 10 windows, in the same session:
     here; only a click on empty desktop zooms out) and the see-through backdrop at 100% (there's
     no overlay at 100% here); a window restored from the taskbar after the view moved away was
     already glided to (the Mac's ⌘-Tab after hiding). Tested in the VM: the display going off
-    (SC_MONITORPOWER) and on is noticed and moves nothing; the lock is noticed; a restore after
+    (SC_MONITORPOWER) and on is noticed and moves nothing; so is a lock and unlock (every frame
+    the same after); a restore after
     Tidy Up gives back all six frames and home spots exactly; two wheel notches on a tidied layout
     snap by 95 and 64 px, lining Notepad and Terminal up a gap in (on an untidy layout, with
     windows 7 px apart, the Mac's scoring prefers pushing most windows out of sight: 893 px); the
