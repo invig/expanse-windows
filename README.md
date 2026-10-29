@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11">
+  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4">
   <img alt="Free and open source, MIT" src="https://img.shields.io/badge/free-MIT-blue">
 </p>
 
