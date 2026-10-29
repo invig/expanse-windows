@@ -1,227 +1,280 @@
-# Expanse for Windows
+<p align="center">
+  <img src="docs/images/preview.jpg" alt="Expanse for Windows, zoomed out: six windows on one canvas with their names above them, the one under the pointer ringed, and the Desktops panel and minimap in the bottom-right corner" width="900">
+</p>
 
-A Windows port of [Expanse](https://github.com/invig/expanse), the infinite-canvas window
-manager: every window has its own place on one endless desktop; zoom out to see them all, click
-one to glide straight to it.
+<p align="center">
+  <strong>Every window gets its own place on one endless desktop.</strong><br>
+  Zoom out to see them all. Click one to glide straight to it.
+</p>
 
-<p align="center"><img src="docs/images/milestone-zoomed-out.jpg" alt="Zoomed out: every window live on the canvas" width="720"></p>
+<p align="center">
+  <a href="https://github.com/invig/expanse-windows/releases/latest"><strong>Download</strong></a> ·
+  <a href="#install">Install</a> ·
+  <a href="#the-basics">How to use it</a> ·
+  <a href="#questions">Questions</a> ·
+  <a href="https://github.com/invig/expanse">Expanse for Mac</a>
+</p>
 
-It does what the Mac app does (see [docs/spikes.md](docs/spikes.md) for how each part was
-built and tested):
+<p align="center">
+  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11">
+  <img alt="Free and open source, MIT" src="https://img.shields.io/badge/free-MIT-blue">
+</p>
 
-- **Zoom out** with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>`</kbd> (the key below <kbd>Esc</kbd>, on any
-  layout), by resting the pointer in any corner of the screen (the **Hot Corner**, tray menu:
-  every corner as on the Mac, or just one, or off), or by clicking empty desktop: every window, live, at its spot on the canvas. **Show Window
-  Names** (tray) puts each app's name above its picture (the window's title too when the pointer is
-  on it); off by default, as on the Mac, since titles can be private.
-- **The minimap** (bottom right, zoomed out) shows every window and where you are; click or drag in
-  it to move there. With more than one virtual desktop, the **Desktops** panel beside it (the Mac's
-  Spaces panel) has a tile for each; click one to go there. Each desktop's windows are on the
-  canvas while it's the current one, and come back to their spots.
-- **Click a window** to glide to it at 100%, centred in the work area and focused. The other windows
-  move with the canvas, off-screen if that's where the camera puts them.
-- <kbd>Ctrl</kbd> <kbd>Alt</kbd> + arrow keys **hop to the nearest window in that direction**,
-  glide to it and focus it (Ctrl+arrows is word-jump in every app and Win+arrows is Snap, so
-  Ctrl+Alt). Zoomed out, the arrows alone move the highlight and the view follows; <kbd>Return</kbd>
-  dives into it.
-- **Drag a window's picture while zoomed out** to move it on the canvas. It snaps to other windows'
-  edges and centres, the standard 20 px gap, a whole row or column, and the middle of the screen,
-  with pink guides. Hold <kbd>Ctrl</kbd> to move it freely (⌘ on the Mac). The real window follows
-  when you go back to 100%.
-- **Tidy Up** (<kbd>T</kbd> zoomed out, or the tray menu) tidies each group of windows where it is:
-  overlaps pushed apart, edges that nearly line up lined up, gaps closed to 20 px. Everything glides
-  to its new spot.
-- **New windows open in free space** next to the window you were in (right, below, left, and above
-  only when there's nothing nearer), as on the Mac; the view glides there if that's off screen. A
-  window coming back from being minimised goes back to its own spot; an app opening again gets its
-  windows' saved spots (its loading box goes in the middle of the main window's, not in it), but a
-  window an app opens later (a new Explorer window) is a new one, beside you. Closing or
-  minimising the window you're in doesn't send the view to whichever window Windows focuses next.
-- **Getting around zoomed out**, as on the Mac: the mouse wheel (or a touchpad's two-finger
-  scroll) pans, sideways with <kbd>Shift</kbd> or a tilt wheel; <kbd>Ctrl</kbd>+wheel (or a pinch)
-  zooms around the pointer; or hold <kbd>Space</kbd> and drag. <kbd>0</kbd> fits every window,
-  <kbd>1</kbd> zooms to 100%, <kbd>-</kbd> and <kbd>=</kbd> zoom out and in. <kbd>Esc</kbd> or the
-  hotkey again goes back to where you were, or, once you've moved the view, to 100% where you're
-  looking. Scrolling over empty desktop starts moving around from 100%. Once you've placed the view
-  yourself, clicking a window that's partly on screen leaves it where it is.
-- <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> centres the window you're in;
-  <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>`</kbd> turns Auto-Centre on or off.
-- **Select several windows** with <kbd>Shift</kbd>-click, by dragging a box over empty canvas
-  (<kbd>Shift</kbd> adds to the selection), or with <kbd>Ctrl</kbd> <kbd>A</kbd>; <kbd>Esc</kbd>
-  clears it. Dragging any of them moves them all, snapping as one block.
-- **Close windows from the canvas** with the × at the top right of the picture under the pointer
-  (on every selected window when it's one of them), or <kbd>Ctrl</kbd> <kbd>W</kbd> (the selection,
-  otherwise the window under the pointer). A window that asks first ("Save changes?") is brought up
-  so you can answer.
-- **Windows are tracked live.** New windows join the canvas where they open, closed ones leave it,
-  and moving a window moves its spot. Zoomed out, pictures appear and disappear as windows come and
-  go.
-- **Picking a window that isn't fully on screen glides to it.** That covers the taskbar, Alt-Tab, or
-  an app bringing its window forward. This is the Mac's Auto-Centre, and it's on the tray menu.
-  Focus coming back to the window you were already in (after the taskbar or Start menu) doesn't
-  count.
-- **A tray icon** (Expanse's glyph from the Mac menu bar): click it to zoom out, right-click for
-  the menu, as on the Mac: Open, Pause/Resume, Centre Current Window, Auto-Centre, Desktop Picture
-  Background, Show Window Names, Hot Corner, Tidy Up, Restore Layout, Restore All Windows (the last
-  resort: every window off the screen stacked into view), Include Admin Windows, Welcome &
-  Shortcuts, Check for Updates, Open at Login, Troubleshooting (Detailed Logging, Copy Logs for a
-  Bug Report, Show Log File, Report an Issue on GitHub), Quit. Windows 11 puts new tray icons in the overflow (^); drag it onto the taskbar to keep
-  it in view.
-- **Welcome & Shortcuts** opens on first launch: the shortcuts, where the hot corner is, and any
-  shortcut another app holds.
-- **The log never has window titles** (what Expanse did with which app's windows), and is written
-  to a file only with Detailed Logging on.
-- **`expanse://` links** for scripting, as on the Mac: `start expanse://tidy`; also toggle, enter,
-  exit, centre, fit, restore, pause, resume, `nav?dir=left`, `focus?app=Notepad`,
-  `layout?snapshot=0`, `zoom?scale=0.5`, `pan?dx=100&dy=0`.
-- **Dialogs stay in reach.** Zoomed out, a dialog asking you something (a window's "Save
-  changes?", another app's always-on-top prompt) shows over the canvas. VM and remote-desktop
-  windows (Remote Desktop, Hyper-V, VirtualBox, VMware, Parsec…) keep the size their app gives them.
-- **The canvas is saved** (`%LOCALAPPDATA%\Expanse\layout.json`, a second after changes, and on
-  pause or quit). Starting again puts the view and every window back where they were. An app opened
-  later that had windows last time gets their spots back. Windows are matched by the same window
-  while its app keeps running, then by app and title, then by app. Titles are stored only as
-  hashes.
-- **At home on any screen size.** Each window keeps a home spot (its place in the full-size
-  layout) and the size you chose (dragging an edge, or Snap, a snap layout or a tool like
-  FancyZones). When the screen changes (resolution, scale, taskbar), the layout is fitted from home:
-  - sizes go back to what you chose, capped at the screen (one sized to fill it keeps filling it);
-  - positions are derived so every gap keeps its size, and a window in a column stays lined up
-    with the one above; only the overlaps the smaller screen caused are pushed apart;
-  - each window moves only as far as the change moves it, so a round trip between two screens
-    comes back exactly, and Expanse starting again on the same screen moves nothing;
-  - the window you were in goes in the middle.
+---
 
-  Windows opened or moved on the smaller screen get a home spot from their neighbours, so they
-  carry over too. Tidy Up tidies the home layout and caps window sizes too.
-- **Scaling changes** (Settings > Display > Scale) work like a change of screen size, as on the Mac:
-  the canvas grows or shrinks by the same ratio, so windows keep their size relative to what's in
-  them (Windows resizes most, and Expanse resizes the ones it doesn't), then the layout is fitted.
-  The saved layout and snapshots remember the scaling they were made at.
-- **The canvas is the main monitor's,** as on the Mac. With more than one monitor, windows on the
-  others are left alone; move one onto the main screen and it joins the canvas where you drop it,
-  move one of the canvas's windows onto another monitor and it leaves. Windows parked off the main
-  screen never wait on another monitor: one that would goes just past an edge of the main screen
-  with no monitor beyond it.
-- **Restore Layout** (tray menu): a snapshot of the layout is taken when it has changed and the
-  last one is 15 minutes old; the newest three are kept. Picking one puts every window back where
-  it had them, fitted to this screen and shown zoomed out. The layout it replaces becomes a
-  snapshot, so you can go back.
-- **Dialogs go with their window.** Windows doesn't move a dialog (Find, Properties, "Save
-  changes?") when its owner moves, so Expanse does: each keeps its place by its window, moves and
-  shows with it zoomed out, and clicking its picture goes to the window. Move a dialog yourself and
-  it keeps the new place. A dialog that opens while its window is off screen goes onto its window,
-  and clicking the window's taskbar button (or anything that focuses the dialog) glides there.
-- **Maximised windows are screen-sized windows on the canvas.** Windows won't move a maximised
-  window, so when the view moves off one, Expanse makes it an ordinary window of the same size to
-  move it, and maximises it again when you come back to it. Un-maximising it yourself gives you
-  back your own size.
-- **Admin windows** (an admin terminal, Task Manager, an installer). Windows won't let a program
-  move the windows of one running as administrator. Run normally, Expanse leaves them off the
-  canvas, where they are, and says so once. **Include Admin Windows…** on the tray menu starts
-  Expanse again as administrator (Windows asks first, and asks each time Expanse starts while it's
-  on), taking over without moving anything. Unticking it puts admin windows back where they were
-  and starts Expanse again as you. Run as administrator, Expanse only takes `expansectl` commands
-  from admin programs.
-- **Pausing or quitting** puts every window back where it was before Expanse moved it, as does the
-  next start after a crash (`Expanse.exe --restore` does it by hand).
+Expanse treats your screen as a view onto a much bigger canvas. Your windows stay where you put
+them on it; you move the view instead of the windows. Rest the pointer in a corner of the screen
+to see everything at once, then click a window to fly to it, ready to use.
 
-C# / .NET 10, built for ARM64 for now (the dev VM). Live pictures are DWM's shared thumbnail
-visuals, with plain DWM thumbnails as the fallback. See [docs/spikes.md](docs/spikes.md) for why,
-and for what's next.
+It's [Expanse for Mac](https://github.com/invig/expanse) for Windows, following the same layout
+rules line for line.
+
+- **See everything at once.** Every window, live, laid out the way you arranged it.
+- **Move around by direction.** <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + arrow keys hop to the next
+  window to the left, right, above or below.
+- **Arrange like a design tool.** Drag windows around; they snap into neat, even gaps. New
+  windows open beside the one they came from.
+- **At home on a laptop or a big display.** On a smaller screen the layout tightens up, columns
+  staying lined up, and plugging back in puts it back exactly.
+- **Easy to leave.** Pause or quit and every window goes straight back to where it was.
 
 ## Install
 
-Download the zip for your PC from [Releases](https://github.com/invig/expanse-windows/releases/latest):
-**x64** for most PCs, **arm64** for Windows on Arm. Unzip it into a folder of your own (in your user
-folder, not Program Files, so Expanse can update itself) and run **Expanse.exe**. It's one file,
-with nothing else to install, and runs on Windows 11. **Open at Login** on the tray menu starts it
-with Windows.
+[Download the latest version](https://github.com/invig/expanse-windows/releases/latest): **x64**
+for most PCs, **arm64** for Windows on Arm (Snapdragon laptops, Surface Pro X). Unzip it into a
+folder of your own, somewhere in your user folder rather than Program Files so Expanse can update
+itself, and run **Expanse.exe**. It's a single file with nothing else to install, runs on
+Windows 11, and keeps itself up to date.
 
-Expanse isn't code-signed yet, so the first time, Windows may say "Windows protected your PC":
+Expanse isn't code-signed yet, so the first time, Windows may say *Windows protected your PC*:
 choose **More info**, then **Run anyway**.
 
-**Updates** come from this repo's releases, as on the Mac: once a day Expanse asks GitHub for the
-latest, downloads it, checks it (the SHA-256 GitHub lists, the version; once Expanse is signed, the
-same publisher's signature), and the tray icon says it's ready. Install restarts Expanse with your
-windows where they are. **Check for Updates…** on the tray menu checks now; `expanse://update`
-does too (`?install=1` installs what it finds).
+## First launch
 
-## How it works
+There's nothing to grant: Windows lets Expanse move windows and show their pictures as it is. A
+Welcome window shows the shortcuts and where the hot corner is, and says if another app already
+uses one of Expanse's keys.
 
-Same model as the Mac app ([how it works](https://github.com/invig/expanse/blob/main/docs/how-it-works.md)):
-a camera (origin and scale) over one canvas, each window at a fixed spot.
+Expanse lives in the tray. Windows 11 tucks new tray icons under <kbd>^</kbd> on the taskbar:
+drag Expanse's onto the taskbar to keep it in reach, and pick **Open at Login** from its menu to
+start it with Windows.
 
-- **At 100% windows are real** and sit exactly where the camera puts them. Unlike macOS, Windows lets
-  a window sit wholly off-screen, so there's no corner parking.
-- **Zoomed out** a full-screen, topmost overlay rises with a live picture of every window, first
-  exactly over the real windows, then animated out (ease-out cubic, 0.22 s; scale interpolated in log
-  space, as on the Mac).
-- **The pictures are DWM shared thumbnail visuals:** DirectComposition visuals that DWM fills with
-  each window, in a visual tree over the overlay. Each sits at its canvas spot inside one canvas
-  visual, so the camera is a single transform per frame. The API is undocumented (dwmapi #147). If
-  it's missing or fails, Expanse falls back to documented DWM thumbnails, one call per picture per
-  frame. `Expanse.exe --pictures dwm` forces the fallback.
-- **When DWM restarts** (after a graphics driver reset or update) the pictures die with it, as the
-  Mac's do when its capture service restarts. Expanse waits for it (no zooming out, no reading
-  window frames, no hot corner meanwhile) and then makes new pictures, in place if zoomed out.
-- **Our UI is in the same tree, over the pictures:** titles (Direct2D/DirectWrite, drawn once per
-  text), the hover and selection rings and close buttons (each in its picture's place in the
-  stack, so a window in front covers them), the marquee and snapping guides. Everything
-  that moves with the camera changes in one composition commit per frame. With the fallback, DWM
-  draws its thumbnails over everything, so titles and rings go on the backdrop underneath, and
-  there are no close buttons (<kbd>Ctrl</kbd> <kbd>W</kbd> still works).
-- **Off-screen windows come on-screen underneath the overlay** while it's up. GDI-drawn apps
-  (classic Win32, Explorer's file list) only paint the parts of a window that are on a screen, so
-  parked ones would otherwise show stale or empty pictures.
-- **Clicking one** animates the camera to it (0.18 s), then moves every real window once
-  (`SetWindowPos`, asynchronous so a hung app can't stall it), waits for the ones in view to land,
-  focuses the window and drops the overlay.
-- Animation runs a frame at a time on the UI thread, paced by `DwmFlush`.
-- **Window events** come from `SetWinEventHook`, out of context (nothing is injected into other
-  apps), on the UI thread. Comings, goings and moves are gathered into one sync 50 ms after the last
-  of them; focus acts where it settles, 120 ms later.
+## The basics
 
-## Layout
-
-| Path | What |
+| Do this | To |
 |---|---|
-| `src/Expanse` | The app |
-| `src/Ctl` | `expansectl`: sends commands to the running app over a named pipe |
-| `src/Guest` | Test helper on the VM's desktop: screenshots, clicks, keys, the wheel |
-| `src/Spikes` | Week-one experiments (pictures, parking, focus) |
-| `src/Layout` | The canvas maths (nearest window, Tidy Up, free spots, snapping) and geometry, no Windows APIs |
-| `src/Layout.Tests` | Its tests: by hand, and against the Mac app's own Swift on random layouts |
-| `src/Native` | Hand-written Win32 declarations shared by all of them |
-| `scripts/vm.sh` | Drives the dev VM from the Mac |
+| Rest the pointer in a screen corner, or press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>`</kbd> | Zoom out to every window (do it again to go back) |
+| Click a window | Glide to it and start using it |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> | Hop to the next window in that direction |
+| Scroll, or pinch | Move around the canvas, and zoom |
+| Drag a window while zoomed out | Move it; it snaps into place |
+| <kbd>T</kbd> | Tidy up: each group of windows lined up and evenly spaced, where it is |
+| <kbd>Esc</kbd> | Back to 100% |
 
-## Developing (from the Mac, against the UTM VM)
+<kbd>`</kbd> is the key below <kbd>Esc</kbd>, whatever your keyboard layout.
 
-The dev machine is a Windows 11 on Arm VM in UTM on the Mac, reached over SSH. Programs started
-over SSH can't show windows, so anything that needs the desktop runs through a scheduled task in
-the signed-in session (`scripts/guest/desk.ps1`).
+<details>
+<summary><strong>All shortcuts</strong></summary>
 
-```bash
-scripts/vm.sh setup         # once: OpenSSH with this Mac's key, the .NET 10 SDK
-scripts/vm.sh build         # sync the source over and build everything
-scripts/vm.sh start         # (re)start Expanse on the VM's desktop (`start admin`: as administrator)
-scripts/vm.sh ctl zoomout   # or: pick <title>, back, state, windows, log, pause, resume, bench 5, quit
-scripts/vm.sh ctl screen 640 480   # pretend the screen is that size (no size: the real one)
-scripts/vm.sh ctl monitor 1440 0 1920 1080   # pretend there's another monitor there (none: no pretend one)
-scripts/vm.sh guest scale 125      # the main display's scaling (`scale 150 2`: display 2's)
-scripts/vm.sh shot out/both.png all          # every display, not just the main one
-scripts/vm.sh shot          # out/shot.png: the VM's screen
-scripts/vm.sh test          # the layout maths' tests
-DRY_RUN=1 scripts/release.sh   # release builds (arm64, x64) zipped in artifacts/release
-scripts/release.sh          # the same, published as a GitHub release (bump <Version> first)
+| Do this | To |
+|---|---|
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd> | Centre the window you're in |
+| <kbd>Ctrl</kbd> + scroll | Zoom around the pointer |
+| <kbd>Shift</kbd> + scroll | Move sideways |
+| <kbd>Space</kbd> + drag | Move around the canvas |
+| Click empty desktop | Zoom out to every window |
+| Scroll on empty desktop | Start moving around the canvas from 100% |
+| Click or drag in the minimap | Move the view there |
+| Drag on empty canvas, <kbd>Shift</kbd>-click, or <kbd>Ctrl</kbd> + <kbd>A</kbd> | Select windows, then drag any of them to move the group |
+| Hold <kbd>Ctrl</kbd> while dragging | Move without snapping |
+| <kbd>0</kbd> · <kbd>1</kbd> · <kbd>-</kbd> · <kbd>=</kbd> | Fit everything · 100% · zoom out · zoom in |
+| Arrow keys · <kbd>Return</kbd> | Move the highlight · dive into the highlighted window |
+| Hover <kbd>×</kbd>, or <kbd>Ctrl</kbd> + <kbd>W</kbd> | Close the window, or every selected window |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> | Turn auto-centring on or off (off suits side-by-side work) |
+
+</details>
+
+**Virtual desktops** each have their windows on the canvas while they're the one you're on. The
+**Desktops** panel next to the minimap, at the bottom of the screen, has a tile for each: click
+one to go there, or use <kbd>Win</kbd> + <kbd>Ctrl</kbd> + arrows as usual.
+
+**Maximised windows** are screen-sized windows on the canvas. Expanse lets go of the maximise to
+move one out of view, and maximises it again when you come back to it.
+
+**Dialogs** stay with their window, and one asking you something while you're zoomed out
+("Save changes?") shows over the canvas.
+
+**Other monitors** are yours. The canvas is the main monitor's, as on the Mac, and windows on the
+others are left alone; drag one onto the main screen and it joins the canvas where you drop it.
+
+**The tray icon** has the rest. Click it to zoom out; right-click for Pause, Tidy Up, Centre
+Current Window, Restore Layout, Restore All Windows, which corners to use, window names, the
+desktop picture, Include Admin Windows, Welcome & Shortcuts, updates, Open at Login, and
+Troubleshooting (logs for a bug report).
+
+## Questions
+
+<details>
+<summary><strong><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>`</kbd> or the arrow keys do nothing</strong></summary>
+
+Another app got there first. The Welcome window says which shortcut (tray icon › Welcome &
+Shortcuts). Some graphics drivers use <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + arrows to rotate the
+screen: turn that off in the driver's settings. Meanwhile, zoom out with a screen corner or the
+tray icon, and hop with the arrow keys while zoomed out.
+
+</details>
+
+<details>
+<summary><strong>Windows says “Windows protected your PC”</strong></summary>
+
+That's SmartScreen, because Expanse isn't code-signed yet. Choose **More info**, then **Run
+anyway**. Updates Expanse installs itself don't ask again.
+
+</details>
+
+<details>
+<summary><strong>My windows ended up somewhere odd</strong></summary>
+
+Tray icon › **Restore Layout** puts them back the way they were earlier. Expanse keeps your last
+three layouts, saved at least 15 minutes apart, and a restore can be undone too. **Tidy Up**
+neatens things where they are. As a last resort, **Restore All Windows** brings every window into
+view, stacked in the middle of the screen.
+
+</details>
+
+<details>
+<summary><strong>Some windows won't move (Task Manager, an admin terminal)</strong></summary>
+
+Windows doesn't let a program move the windows of one running as administrator, so Expanse leaves
+those where they are, off the canvas. To have them on it too, pick **Include Admin Windows…** from
+the tray icon: Expanse starts again as administrator, without moving anything. Windows asks first,
+and again each time Expanse starts while it's on.
+
+</details>
+
+<details>
+<summary><strong>Something went wrong. How do I report it?</strong></summary>
+
+1. Tray icon › Troubleshooting › turn on **Detailed Logging**.
+2. Make it happen again.
+3. Troubleshooting › **Copy Logs for a Bug Report**, then **Report an Issue on GitHub…** and paste
+   them in, with a line about what you did and what you expected.
+
+The copy says which Windows and Expanse version, your displays and settings, then the log. Window
+titles are left out. Turn Detailed Logging off again once it's reported.
+
+</details>
+
+<details>
+<summary><strong>What does it keep, and what does it send?</strong></summary>
+
+Window pictures come straight from Windows' compositor: Expanse never captures, records or sends
+them. The one network request is a daily update check to GitHub, which you can turn off (tray icon
+› Check for Updates Automatically). Expanse's files are in `%LOCALAPPDATA%\Expanse`: its layouts
+(window positions and sizes, app names, and a scrambled fingerprint, a hash, of each window's
+title, which recognises the window without storing the title), its settings, and where your windows
+were before Expanse moved them, so they can go back. With **Detailed Logging** on, its log goes
+there too (`expanse.log`, at most 5 MB): what it did with which app's windows, never their titles.
+It stays on your PC unless you copy it into a bug report yourself. In the registry, Expanse adds its
+`expanse://` link and, with Open at Login on, a startup entry.
+
+</details>
+
+<details>
+<summary><strong>What can't it do?</strong></summary>
+
+- **One monitor's canvas.** Windows on other monitors are left alone, as on the Mac.
+- **No typing while zoomed out.** There, keys move around the canvas. Click a window, or press
+  <kbd>Return</kbd>, to use it.
+- **Start, the taskbar and notifications** show over the canvas while they're open, as the Dock
+  and notifications do on the Mac.
+- **Tested in a virtual machine,** on Windows 11 on Arm, with the x64 build under Windows' x64
+  emulation there. Please [open an issue](https://github.com/invig/expanse-windows/issues) if
+  anything misbehaves on your PC.
+
+</details>
+
+<details>
+<summary><strong>How is it different from Expanse for Mac?</strong></summary>
+
+- <kbd>Ctrl</kbd> + <kbd>Alt</kbd> stands in for <kbd>⌃</kbd> and <kbd>⌥</kbd>: <kbd>Ctrl</kbd> +
+  <kbd>Alt</kbd> + <kbd>`</kbd> zooms out, <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + arrows hop. Zoomed
+  out, <kbd>Ctrl</kbd> stands in for <kbd>⌘</kbd>.
+- The tray icon is the menu bar icon, and the Desktops panel, for virtual desktops, is the Spaces
+  panel.
+- Nothing to grant: Windows has no Accessibility or Screen Recording permission to ask for.
+- Maximised windows, dialogs that follow their window, and admin windows are Windows' own, and
+  handled as above.
+
+</details>
+
+<details>
+<summary><strong>How do I uninstall it?</strong></summary>
+
+Turn off **Open at Login** in the tray icon's menu, then **Quit Expanse**: your windows go back
+where they were. Delete Expanse's folder, then its layouts and settings, and its `expanse://` link:
+
+```powershell
+Remove-Item -Recurse "$env:LOCALAPPDATA\Expanse"
+reg delete HKCU\Software\Classes\expanse /f
 ```
 
-**The layout maths is a line-for-line port of the Mac app's** (nearest window, derive, separate,
-clusters, Tidy Up, free spots, snapping). `scripts/layout-oracle.py` takes those functions from the
-Mac checkout (`../CANVAS`), runs them on random layouts with Swift, and writes
-`tests/layout-fixtures.json`. `src/Layout.Tests` requires the C# to give exactly the same answers.
-Run the script again when the Mac's maths changes.
+</details>
 
-Settings live in `%LOCALAPPDATA%\Expanse\settings.json`. Expanse logs to
-`%LOCALAPPDATA%\Expanse\expanse.log` in the VM (`scripts/vm.sh ctl log` shows the
-end of it).
+## For tinkerers
+
+<details>
+<summary><strong>Scripting with <code>expanse://</code> links</strong></summary>
+
+From PowerShell:
+
+```powershell
+start expanse://toggle               # zoom out / back
+start expanse://tidy
+start "expanse://nav?dir=left"       # left | right | up | down
+start expanse://centre               # the window you're in, to the middle
+start "expanse://focus?app=Notepad"
+start "expanse://layout?snapshot=0"  # back to the newest saved layout (1, 2: older ones)
+start expanse://pause                # windows back where they were
+start expanse://resume
+start "expanse://update?install=1"   # check for an update, and install it
+```
+
+Also `enter`, `exit`, `fit`, `zoom?scale=0.5`, `pan?dx=100&dy=0` and `restore`.
+
+</details>
+
+<details>
+<summary><strong>Building from source</strong></summary>
+
+You'll need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+
+```powershell
+git clone https://github.com/invig/expanse-windows.git
+cd expanse-windows
+dotnet run --project src\Expanse -r win-x64    # win-arm64 on Windows on Arm
+```
+
+It's developed from a Mac against a Windows virtual machine; the scripts for that are in
+`scripts/`.
+
+</details>
+
+Curious how it shows every window live, and how it's tested against the Mac's own code? See
+[How Expanse for Windows works](docs/how-it-works.md).
+
+## Thanks
+
+- [Expanse for Mac](https://github.com/invig/expanse), whose layout rules this follows line for
+  line, tested against its own Swift.
+- [ADeltaX](https://github.com/ADeltaX), whose write-up on DWM's shared thumbnail visuals made the
+  live canvas possible.
+- [Vortice.Windows](https://github.com/amerkoleci/Vortice.Windows) by Amer Koleci (MIT), for
+  DirectComposition and Direct2D from C#.
+- [UTM](https://github.com/utmapp/UTM), where Expanse for Windows was built and tested, and the
+  [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) for a second
+  monitor there.
+
+## Licence
+
+[MIT](LICENSE)
