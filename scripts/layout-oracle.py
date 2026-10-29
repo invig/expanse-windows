@@ -54,8 +54,15 @@ statics = [
     line(CONTROLLER, "static let gap: CGFloat"),
     line(CONTROLLER, "static let clusterReach: CGFloat"),
     line(CONTROLLER, "static let alignReach: CGFloat"),
+    line(CONTROLLER, "static let screenMargin: CGFloat"),
+    line(CONTROLLER, "enum Anchor: Equatable {"),
     block(CONTROLLER, "static func nearest(_ direction: Direction, from: CGRect, in frames: [CGRect]) -> Int? {"),
     block(CONTROLLER, "static func derive(home:"),
+    block(CONTROLLER, "static func anchor(_ i: Int, in frames: [CGRect]) -> Anchor? {"),
+    block(CONTROLLER, "static func anchors(_ i: Int, in frames: [CGRect]) -> [Anchor] {"),
+    block(CONTROLLER, "static func isNearest(_ anchor: Anchor?"),
+    block(CONTROLLER, "private static func anchorCandidates("),
+    block(CONTROLLER, "static func cap(_ chosen: CGSize, to view: CGSize) -> CGSize {"),
     block(CONTROLLER, "static func separate(_ frames: inout [CGRect]"),
     block(CONTROLLER, "struct IndexPair: Hashable {"),
     block(CONTROLLER, "static func overlappingPairs("),
@@ -72,6 +79,7 @@ statics = [
         ("let others = windows.filter { $0 !== w }.map(\\.canvasFrame)\n", ""),
         ("let size = w.canvasFrame.size\n", ""),
         ("let target = anchor?.canvasFrame.center ?? camera.center(in: viewSize)\n", ""),
+        ("let above = anchor?.canvasFrame.minY ?? target.y", "let above = anchorFrame?.minY ?? target.y"),
         ("let visible = camera.toCanvas(CGRect(origin: .zero, size: viewSize))\n", ""),
         ("if let a = anchor?.canvasFrame {", "if let a = anchorFrame {"),
         ("let away: CGFloat = anchor == nil ? 0 : 5000", "let away: CGFloat = anchorFrame == nil ? 0 : 5000"),
@@ -141,6 +149,8 @@ struct AnyCodable: Encodable {
         case let v as [[Double]]: try c.encode(v)
         case let v as [Int]: try c.encode(v)
         case let v as [[Int]]: try c.encode(v)
+        case let v as [[[Int]]]: try c.encode(v)
+        case let v as [Bool]: try c.encode(v)
         case is NSNull: try c.encodeNil()
         case let v as AnyCodable: try c.encode(v)
         case let v as [String: AnyCodable]: try c.encode(v)
@@ -167,6 +177,23 @@ for _ in 0..<300 {
 
     let sizes = frames.map { chance(0.5) ? $0.size : CGSize(width: CGFloat(int(Int($0.width / 2), Int($0.width))), height: CGFloat(int(Int($0.height / 2), Int($0.height)))) }
     add("derive", ["home": frames.map(r), "sizes": sizes.map { [d($0.width), d($0.height)] }, "want": L.derive(home: frames, sizes: sizes).map(p)])
+
+    // Fitted to a smaller screen as fitting does (sizes capped: many come out the same width), and
+    // with random shrinks: each window's anchors there, and whether its home anchors are still nearest.
+    let small = CGSize(width: int(800, 1600), height: int(600, 1000))
+    for shrunk in [frames.map { L.cap($0.size, to: small) }, sizes] {
+        let here = zip(L.derive(home: frames, sizes: shrunk), shrunk).map { CGRect(origin: $0, size: $1) }
+        let homeT = frames.map(\.transposed), hereT = here.map(\.transposed)
+        for i in frames.indices {
+            let anchors = [L.anchors(i, in: here), L.anchors(i, in: hereT)].map { $0.map { a -> [Int] in
+                switch a { case .gap(let j): return [j, 0]; case .edge(let j): return [j, 1] } } }
+            add("anchors", ["here": here.map(r), "i": i, "want": anchors])
+            add("isNearest", ["home": frames.map(r), "here": here.map(r), "i": i,
+                              "want": [L.isNearest(L.anchor(i, in: frames), i, in: here), L.isNearest(L.anchor(i, in: homeT), i, in: hereT)]])
+        }
+    }
+    let chosen = CGSize(width: int(200, 3000), height: int(200, 2000))
+    add("cap", ["chosen": [d(chosen.width), d(chosen.height)], "view": [d(small.width), d(small.height)], "want": [d(L.cap(chosen, to: small).width), d(L.cap(chosen, to: small).height)]])
 
     let onlyOverlaps = chance(0.5)
     let keepFrom = layout().prefix(frames.count)

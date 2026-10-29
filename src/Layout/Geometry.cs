@@ -37,6 +37,9 @@ public readonly record struct RectD(double X, double Y, double W, double H)
 
     public RectD Offset(Vec d) => new(X + d.X, Y + d.Y, W, H);
 
+    /// x and y swapped, to run a horizontal layout rule vertically.
+    public RectD Transposed => new(Y, X, H, W);
+
     public RectD Union(RectD r)
     {
         if (r.IsNull) return this;

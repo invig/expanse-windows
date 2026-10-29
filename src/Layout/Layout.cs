@@ -80,32 +80,94 @@ public static class Layout
 
     // MARK: Fitting the layout to a screen
 
-    /// Positions for windows of `sizes` that keep the `home` layout's gaps where you see them: each
-    /// window keeps its distance to its nearest window on the left (and above), whether that's a
-    /// snapped neighbour or the next group over, so shrinking windows pull the layout in. With
-    /// home sizes this returns the home positions exactly. Callers push apart any overlap left.
+    /// The gap kept around a window that would otherwise fill the screen. Every fit uses the same
+    /// one, or a window fitted after a display change would shrink (and shift) the first time you
+    /// focus it.
+    public const double ScreenMargin = 16;
+
+    /// A window of `chosen` size on a screen of `view`: as chosen where it fits; where it doesn't (a
+    /// size from a bigger screen), the screen less a margin all round, so it doesn't touch the
+    /// edges. A window you sized to fill the screen (Snap, say) keeps filling it.
+    public static SizeD Cap(SizeD chosen, SizeD view) => new(
+        chosen.W <= view.W ? Round(chosen.W) : Round(view.W - ScreenMargin * 2),
+        chosen.H <= view.H ? Round(chosen.H) : Round(view.H - ScreenMargin * 2));
+
+    /// Positions for windows of `sizes` that keep the `home` layout where you see it: each window
+    /// keeps its gap to its nearest window on the left or, nearer still, its left edge's offset
+    /// from a window above or below it (a column stays lined up); the same for top edges. So
+    /// shrinking windows pull the layout in, and a window keeps with its own group rather than the
+    /// next group over. With home sizes this returns the home positions exactly. Callers push
+    /// apart any overlap left.
     public static Vec[] Derive(IReadOnlyList<RectD> home, IReadOnlyList<SizeD> sizes)
+    {
+        var x = home.Select(h => h.X).ToArray();
+        var y = home.Select(h => h.Y).ToArray();
+        foreach (int i in Indices(home).OrderBy(k => home[k].X).ThenBy(k => home[k].Y).ToList())
+        {
+            if (AnchorOf(i, home) is not Anchor a) continue;
+            int j = a.Index;
+            x[i] = a.Edge ? x[j] + home[i].X - home[j].X : x[j] + sizes[j].W + home[i].X - home[j].Right;
+        }
+        var flipped = home.Select(h => h.Transposed).ToArray();
+        foreach (int i in Indices(home).OrderBy(k => home[k].Y).ThenBy(k => home[k].X).ToList())
+        {
+            if (AnchorOf(i, flipped) is not Anchor a) continue;
+            int j = a.Index;
+            y[i] = a.Edge ? y[j] + home[i].Y - home[j].Y : y[j] + sizes[j].H + home[i].Y - home[j].Bottom;
+        }
+        return x.Zip(y, (a, b) => new Vec(a, b)).ToArray();
+    }
+
+    /// What a window's x keeps from one layout to the next: its gap to window `Index`'s right edge,
+    /// or (`Edge`) its left edge's offset from that window's.
+    public readonly record struct Anchor(int Index, bool Edge);
+
+    /// Window `i`'s anchor among `frames` (for y, pass the frames transposed): the nearest window on
+    /// the left, rows that don't line up counting extra; or, when nearer, a window above or below,
+    /// its left edge's offset counting extra (gaps win ties). Only windows before it in
+    /// left-to-right order, which Derive has placed already.
+    public static Anchor? AnchorOf(int i, IReadOnlyList<RectD> frames) =>
+        Anchors(i, frames) is { Count: > 0 } all ? all[0] : null;
+
+    /// Every anchor as near as the nearest (see AnchorOf), first one first.
+    public static List<Anchor> Anchors(int i, IReadOnlyList<RectD> frames)
+    {
+        var candidates = AnchorCandidates(i, frames);
+        if (candidates.Count == 0) return new();
+        var best = candidates.MinBy(c => (c.Cost, c.Anchor.Edge ? 1 : 0));
+        return candidates.Where(c => c.Anchor.Edge == best.Anchor.Edge && c.Cost <= best.Cost + 0.5).Select(c => c.Anchor).ToList();
+    }
+
+    /// Whether `anchor` is as near as window `i`'s nearest among `frames`, of either kind (none:
+    /// whether it has none). Shrinking windows to the same width can put a window in a column
+    /// exactly the standard gap from the window beside it: a tie the gap wins (see AnchorOf),
+    /// though the column still explains where it is.
+    public static bool IsNearest(Anchor? anchor, int i, IReadOnlyList<RectD> frames)
+    {
+        var candidates = AnchorCandidates(i, frames);
+        if (anchor is not Anchor a || candidates.Count == 0) return anchor == null && candidates.Count == 0;
+        double best = candidates.Min(c => c.Cost);
+        return candidates.Any(c => c.Anchor == a && c.Cost <= best + 0.5);
+    }
+
+    /// Window `i`'s possible anchors among `frames`, each with how far it is (see AnchorOf).
+    static List<(double Cost, Anchor Anchor)> AnchorCandidates(int i, IReadOnlyList<RectD> frames)
     {
         // Distance between ranges; 0 when they overlap.
         static double Span(double a0, double a1, double b0, double b1) => Math.Max(0, Math.Max(a0, b0) - Math.Min(a1, b1));
-        var x = home.Select(h => h.X).ToArray();
-        var y = home.Select(h => h.Y).ToArray();
-        foreach (int i in Indices(home).OrderBy(k => home[k].X).ToList())
+        var r = frames[i];
+        var candidates = new List<(double, Anchor)>();
+        for (int j = 0; j < frames.Count; j++)
         {
-            var left = Indices(home).Where(k => k != i && home[k].Right <= home[i].X + 0.5).ToList();
-            if (left.Count == 0) continue;
-            // Nearest: the horizontal gap, with rows that don't line up counting extra.
-            int j = left.MinBy(k => (home[i].X - home[k].Right) + 2 * Span(home[k].Y, home[k].Bottom, home[i].Y, home[i].Bottom));
-            x[i] = x[j] + sizes[j].W + (home[i].X - home[j].Right);
+            if (j == i) continue;
+            var o = frames[j];
+            if (o.Right <= r.X + 0.5)
+                candidates.Add((r.X - o.Right + 2 * Span(o.Y, o.Bottom, r.Y, r.Bottom), new Anchor(j, false)));
+            else if ((o.X < r.X || (o.X == r.X && o.Y < r.Y)) && Span(o.X, o.Right, r.X, r.Right) == 0
+                     && (o.Bottom <= r.Y + 0.5 || r.Bottom <= o.Y + 0.5))
+                candidates.Add((Span(o.Y, o.Bottom, r.Y, r.Bottom) + 2 * Math.Abs(r.X - o.X), new Anchor(j, true)));
         }
-        foreach (int i in Indices(home).OrderBy(k => home[k].Y).ToList())
-        {
-            var above = Indices(home).Where(k => k != i && home[k].Bottom <= home[i].Y + 0.5).ToList();
-            if (above.Count == 0) continue;
-            int j = above.MinBy(k => (home[i].Y - home[k].Bottom) + 2 * Span(home[k].X, home[k].Right, home[i].X, home[i].Right));
-            y[i] = y[j] + sizes[j].H + (home[i].Y - home[j].Bottom);
-        }
-        return x.Zip(y, (a, b) => new Vec(a, b)).ToArray();
+        return candidates;
     }
 
     /// Push overlapping frames apart in reading order. Only ever moving right or down means it
@@ -282,10 +344,14 @@ public static class Layout
     /// up with the anchor's top or left edge, then its bottom or right, then centred. Only when
     /// every edge is taken, beside the windows nearest `target`, the closest first. Spots in
     /// `visible` (the screen, in canvas space) win; with `onScreenOnly` they're the only ones.
+    /// Upward comes last, near and far: a spot above the anchor only when there's none beside or
+    /// below it within a few thousand pixels (going by distance alone, a gap in the row above
+    /// often won).
     public static Vec? FreeSpot(SizeD size, RectD? anchor, IReadOnlyList<RectD> others, Vec target, RectD visible, bool onScreenOnly)
     {
         if (others.Count == 0) return null;
         const double gap = Gap;
+        double above = anchor?.Y ?? target.Y;
         // (origin, score bias, ranked by distance to the anchor?)
         var candidates = new List<(Vec origin, double bias, bool byDistance)>();
         if (anchor is RectD a)
@@ -314,7 +380,8 @@ public static class Layout
             var r = new RectD(origin.X, origin.Y, size.W, size.H);
             if (others.Any(o => o.Inset(-gap / 2, -gap / 2).Intersects(r))) continue;
             if (onScreenOnly && !visible.Contains(r)) continue;
-            double score = (byDistance ? r.Center.DistanceTo(target) : 0) + bias + (visible.Contains(r) ? 0 : 1500);
+            double score = (byDistance ? r.Center.DistanceTo(target) : 0) + bias + (visible.Contains(r) ? 0 : 1500)
+                + (r.Bottom <= above + 0.5 ? 3000 : 0);
             if (score < (best?.score ?? double.PositiveInfinity)) best = (origin, score);
         }
         return best is { } b ? new Vec(Round(b.origin.X), Round(b.origin.Y)) : null;

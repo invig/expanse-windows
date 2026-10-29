@@ -107,6 +107,40 @@ void InPlace(string fn, Action<RectD[], JsonElement> run)
     }
 }
 InPlace("tidyUp", (f, _) => Layout.TidyUp(f));
+foreach (var (c, i) in root.GetProperty("anchors").EnumerateArray().Select((c, i) => (c, i)))
+{
+    var here = Rs(c.GetProperty("here"));
+    int at = c.GetProperty("i").GetInt32();
+    string Names(IEnumerable<Layout.Anchor> a) => string.Join(" ", a.Select(x => $"{x.Index}{(x.Edge ? "e" : "g")}"));
+    var want = c.GetProperty("want").EnumerateArray()
+        .Select(set => set.EnumerateArray().Select(a => new Layout.Anchor(a[0].GetInt32(), a[1].GetInt32() == 1)).ToList()).ToList();
+    var got = new[] { Layout.Anchors(at, here), Layout.Anchors(at, here.Select(r => r.Transposed).ToArray()) };
+    Check("anchors", i, got[0].SequenceEqual(want[0]) && got[1].SequenceEqual(want[1]),
+        $"want {Names(want[0])} / {Names(want[1])}, got {Names(got[0])} / {Names(got[1])}");
+}
+
+foreach (var (c, i) in root.GetProperty("isNearest").EnumerateArray().Select((c, i) => (c, i)))
+{
+    var home = Rs(c.GetProperty("home"));
+    var here = Rs(c.GetProperty("here"));
+    int at = c.GetProperty("i").GetInt32();
+    var homeT = home.Select(r => r.Transposed).ToArray();
+    var hereT = here.Select(r => r.Transposed).ToArray();
+    bool[] got = [Layout.IsNearest(Layout.AnchorOf(at, home), at, here), Layout.IsNearest(Layout.AnchorOf(at, homeT), at, hereT)];
+    bool[] want = c.GetProperty("want").EnumerateArray().Select(b => b.GetBoolean()).ToArray();
+    Check("isNearest", i, got.SequenceEqual(want), $"want {string.Join(",", want)}, got {string.Join(",", got)}");
+}
+
+foreach (var (c, i) in root.GetProperty("cap").EnumerateArray().Select((c, i) => (c, i)))
+{
+    var ch = c.GetProperty("chosen");
+    var v = c.GetProperty("view");
+    var w = c.GetProperty("want");
+    var got = Layout.Cap(new SizeD(ch[0].GetDouble(), ch[1].GetDouble()), new SizeD(v[0].GetDouble(), v[1].GetDouble()));
+    var want = new SizeD(w[0].GetDouble(), w[1].GetDouble());
+    Check("cap", i, got == want, $"want {want}, got {got}");
+}
+
 InPlace("gravity", (f, _) => Layout.Gravity(f, Layout.Gap));
 InPlace("align", (f, _) => Layout.Align(f, Layout.AlignReach, Layout.Gap));
 InPlace("separateGroups", (f, c) => Layout.SeparateGroups(f,
