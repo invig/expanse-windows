@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Answers from the Mac app's own layout maths, for src/Layout.Tests to check the C# port against.
 
-Extracts the functions verbatim from Expanse's Sources/Expanse/CanvasController.swift (and two
-extensions from Geometry.swift), adds a generator of random layouts (fixed seed), runs it with
+Extracts the functions verbatim from Expanse's Sources/Expanse/CanvasController.swift (with two
+extensions from Geometry.swift, and all of Screens.swift), adds a generator of random layouts (fixed seed), runs it with
 `swift`, and writes tests/layout-fixtures.json: inputs and the Swift's results.
 
     scripts/layout-oracle.py [path to the Expanse checkout, default ../CANVAS]
@@ -21,6 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(ROOT), "CANVAS")
 CONTROLLER = open(os.path.join(MAC, "Sources/Expanse/CanvasController.swift")).read()
 GEOMETRY = open(os.path.join(MAC, "Sources/Expanse/Geometry.swift")).read()
+SCREENS = open(os.path.join(MAC, "Sources/Expanse/Screens.swift")).read()
 
 
 def block(source, start):
@@ -51,7 +52,9 @@ def substitute(text, pairs):
 
 statics = [
     line(CONTROLLER, "enum Direction {"),
-    line(CONTROLLER, "static let gap: CGFloat"),
+    "static var gap: CGFloat = 20",  # the Mac's reads Settings
+    line(CONTROLLER, "static let rowSnapReach: CGFloat"),
+    line(CONTROLLER, "static let screenGroupReach: CGFloat"),
     line(CONTROLLER, "static let clusterReach: CGFloat"),
     line(CONTROLLER, "static let alignReach: CGFloat"),
     line(CONTROLLER, "static let screenMargin: CGFloat"),
@@ -67,6 +70,37 @@ statics = [
     block(CONTROLLER, "struct IndexPair: Hashable {"),
     block(CONTROLLER, "static func overlappingPairs("),
     block(CONTROLLER, "static func clusters("),
+    block(CONTROLLER, "static func screenGroups("),
+    substitute(block(CONTROLLER, "func snapEdges(_ f: CGRect, moving edges: WindowEdges"), [
+        ("func snapEdges(_ f: CGRect, moving edges: WindowEdges, excluding id: CGWindowID) -> (CGRect, [(CGPoint, CGPoint)]) {",
+         "static func snapEdges(_ f: CGRect, moving edges: WindowEdges, all: [CGRect], size: CGSize, scale: CGFloat) -> (CGRect, [(CGPoint, CGPoint)]) {\n"
+         "func slotSize(_ s: Slot) -> CGSize { Screens.frame(of: s, in: CGRect(origin: .zero, size: size), gap: Self.gap).size }"),
+        ("let reach = 10 / camera.scale, gap = Self.gap", "let reach = 10 / scale, gap = Self.gap"),
+        ("let others = windows.filter { $0.id != id && $0.canvasFrame.intersects(near) }.map(\\.canvasFrame)", "let others = all.filter { $0.intersects(near) }"),
+    ]),
+    substitute(block(CONTROLLER, "private func makeRoom(around area: CGRect"), [
+        ("private func makeRoom(around area: CGRect, keeping: Set<CGWindowID>, clearance: CGFloat) {",
+         "static func makeRoom(around area: CGRect, others: [CGRect], clearance: CGFloat) -> [CGRect] {"),
+        ("let others = windows.filter { !keeping.contains($0.id) }\n", ""),
+        ("var frames = [zone] + others.map(\\.canvasFrame)", "var frames = [zone] + others"),
+        ("""        for (w, f) in zip(others, frames.dropFirst()) where f.origin != w.canvasFrame.origin {
+            let before = w.canvasFrame.origin
+            w.canvasFrame.origin = f.origin
+            noteUserMove(w, from: before)
+        }
+""", "        return Array(frames.dropFirst())\n"),
+    ]),
+    substitute(block(CONTROLLER, "private func snappedCamera(going travel"), [
+        ("private func snappedCamera(going travel: CGVector? = nil, wheel: Bool = false) -> Camera {",
+         "static func snappedMove(frames: [CGRect], viewSize: CGSize, going travel: CGVector? = nil, wheel: Bool = false) -> CGVector {"),
+        ("let frames = windows.map { camera.toView($0.canvasFrame) }\n", ""),
+        ("guard shown.contains(where: { !screen.contains($0) }) else { return camera }", "guard shown.contains(where: { !screen.contains($0) }) else { return .zero }"),
+        ("""        var target = camera
+        target.pan(by: CGVector(dx: best.dx, dy: best.dy))
+        target.origin = CGPoint(x: target.origin.x.rounded(), y: target.origin.y.rounded())
+        return target
+""", "        return CGVector(dx: best.dx, dy: best.dy)\n"),
+    ]),
     block(CONTROLLER, "static func tidyUp("),
     block(CONTROLLER, "private static func overlapY("),
     block(CONTROLLER, "private static func overlapX("),
@@ -151,6 +185,7 @@ struct AnyCodable: Encodable {
         case let v as [[Int]]: try c.encode(v)
         case let v as [[[Int]]]: try c.encode(v)
         case let v as [Bool]: try c.encode(v)
+        case let v as [String]: try c.encode(v)
         case is NSNull: try c.encodeNil()
         case let v as AnyCodable: try c.encode(v)
         case let v as [String: AnyCodable]: try c.encode(v)
@@ -218,6 +253,76 @@ for _ in 0..<300 {
     var grouped = frames; L.separateGroups(&grouped, groups: groups, reach: L.clusterReach)
     add("separateGroups", ["frames": frames.map(r), "groups": groups, "want": grouped.map(r)])
 
+    // Separate keeping some frames where they are (evening up, making room).
+    let fixed = Set((0..<int(1, 2)).map { _ in int(0, frames.count - 1) })
+    var held = frames; L.separate(&held, gap: L.gap, onlyOverlaps: true, fixed: fixed)
+    add("separateFixed", ["frames": frames.map(r), "fixed": fixed.sorted(), "want": held.map(r)])
+
+    // Groups: the same layouts, and windows snapped side by side, which is what makes one.
+    let view = chance(0.5) ? CGSize(width: 1512, height: 945) : CGSize(width: 2560, height: 1380)
+    let tight = frames.prefix(int(2, min(4, frames.count))).enumerated().map { (i, f) in
+        CGRect(x: 100 + CGFloat(i) * (400 + CGFloat(int(0, 60))), y: 50 + CGFloat(int(-30, 30)), width: 380 + CGFloat(int(0, 200)), height: 300 + CGFloat(int(0, 500)))
+    }
+    for set in [frames, tight, tight + frames] {
+        add("screenGroups", ["frames": set.map(r), "view": [d(view.width), d(view.height)], "want": L.screenGroups(set, fitting: view)])
+    }
+
+    // Screens: every slot, with each gap.
+    let savedGap = L.gap
+    L.gap = [20, 10, 0][int(0, 2)]
+    let scr = CGRect(x: int(-500, 500), y: int(-500, 500), width: Int(view.width), height: Int(view.height))
+    for slot in Slot.allCases {
+        add("slotFrame", ["slot": slot.rawValue, "screen": r(scr), "gap": d(L.gap), "want": r(Screens.frame(of: slot, in: scr, gap: L.gap))])
+    }
+    let probe = CGPoint(x: frames[0].minX + CGFloat(int(0, Int(frames[0].width))), y: frames[0].minY + CGFloat(int(0, Int(frames[0].height))))
+    add("dropZone", ["p": p(probe), "target": r(frames[0]), "want": none(Screens.dropZone(at: probe, in: frames[0])?.rawValue)])
+    let inScreen = CGPoint(x: scr.minX + CGFloat(int(-50, Int(scr.width) + 50)), y: scr.minY + CGFloat(int(-50, Int(scr.height) + 50)))
+    add("toolSlot", ["p": p(inScreen), "screen": r(scr), "want": none(Screens.toolSlot(at: inScreen, in: scr)?.rawValue)])
+    let some = Slot.allCases.filter { _ in chance(0.4) }
+    let put = Slot.allCases[int(0, Slot.allCases.count - 2)]
+    add("makeWay", ["slot": put.rawValue, "taken": some.map(\.rawValue), "want": Screens.makeWay(for: put, among: some).map { $0?.rawValue ?? "" }])
+    let layouts: [ScreenLayout] = [.halves, .leftAndQuarters, .quartersAndRight, .quarters]
+    let lay = layouts[int(0, 3)]
+    let centres = lay.slots.map { _ in CGPoint(x: int(-1000, 3000), y: int(-1000, 2000)) }
+    add("assign", ["layout": lay.slots.map(\.rawValue), "centres": centres.map(p), "want": Screens.assign(centres, to: lay).map(\.rawValue)])
+    let kept = frames[int(0, frames.count - 1)]
+    add("screenOrigin", ["frame": r(kept), "slot": put.rawValue, "size": [d(view.width), d(view.height)], "gap": d(L.gap),
+                         "want": p(Screens.screenOrigin(keeping: kept, in: put, size: view, gap: L.gap))])
+    // A built screen, nudged as apps nudge sizes, and one that isn't.
+    let built = lay.slots.map { Screens.frame(of: $0, in: scr, gap: L.gap) }
+    let nudged = built.map { CGRect(x: $0.minX + CGFloat(int(-5, 5)), y: $0.minY + CGFloat(int(-5, 5)), width: $0.width - CGFloat(int(0, 40)), height: $0.height - CGFloat(int(0, 40))) }
+    for set in [built, nudged, Array(frames.prefix(4))] {
+        let found = Screens.layout(of: set, size: view, gap: L.gap)
+        add("screenLayout", ["frames": set.map(r), "size": [d(view.width), d(view.height)], "gap": d(L.gap),
+                             "want": found.map { AnyCodable(["screen": AnyCodable(r($0.screen)), "slots": AnyCodable($0.slots.map(\.rawValue))]) } ?? AnyCodable(NSNull())])
+        for f in set {
+            add("slotOf", ["frame": r(f), "screen": r(scr), "gap": d(L.gap), "want": none(Screens.slot(of: f, in: scr, gap: L.gap)?.rawValue)])
+        }
+    }
+    // Edges dragged: near neighbours' edges often, so they snap.
+    let moved = frames[int(0, frames.count - 1)]
+    let edgeSets: [WindowEdges] = [.left, .right, .top, .bottom, [.left, .top], [.right, .bottom], [.left, .bottom], [.right, .top]]
+    let edges = edgeSets[int(0, edgeSets.count - 1)]
+    let dragBy = CGVector(dx: int(-900, 900), dy: int(-900, 900))
+    let f2 = edges.move(moved, by: dragBy, minimum: CGSize(width: 200, height: 120))
+    let scale2: CGFloat = [1, 0.5, 0.25][int(0, 2)]
+    let (edged, edgeLines) = L.snapEdges(f2, moving: edges, all: frames.filter { $0 != moved }, size: view, scale: scale2)
+    add("edgesMove", ["start": r(moved), "edges": edges.rawValue, "by": [d(dragBy.dx), d(dragBy.dy)], "want": r(f2)])
+    add("snapEdges", ["frame": r(f2), "edges": edges.rawValue, "all": frames.filter { $0 != moved }.map(r), "size": [d(view.width), d(view.height)], "scale": d(scale2), "gap": d(L.gap),
+                      "want": AnyCodable(["frame": AnyCodable(r(edged)), "lines": AnyCodable(edgeLines.map { [d($0.0.x), d($0.0.y), d($0.1.x), d($0.1.y)] })])])
+    let clearance: CGFloat = [0, L.screenGroupReach + 1][int(0, 1)]
+    add("makeRoom", ["area": r(scr), "others": frames.map(r), "clearance": d(clearance), "gap": d(L.gap),
+                     "want": L.makeRoom(around: scr, others: frames, clearance: clearance).map(r)])
+    // The snap after a scroll: the layout moved about in view space.
+    let shift = CGPoint(x: int(-1500, 1500), y: int(-1000, 1000))
+    let inView = frames.map { $0.offsetBy(dx: shift.x, dy: shift.y) }
+    let travelNow: CGVector? = chance(0.2) ? nil : CGVector(dx: chance(0.3) ? 0 : CGFloat(int(-400, 400)), dy: chance(0.3) ? 0 : CGFloat(int(-400, 400)))
+    let wheelNow = travelNow != nil && chance(0.3)
+    let moveNow = L.snappedMove(frames: inView, viewSize: view, going: travelNow, wheel: wheelNow)
+    add("snappedMove", ["frames": inView.map(r), "view": [d(view.width), d(view.height)], "travel": none(travelNow.map { [d($0.dx), d($0.dy)] }), "wheel": wheelNow, "gap": d(L.gap),
+                        "want": [d(moveNow.dx), d(moveNow.dy)]])
+    L.gap = savedGap
+
     let anchorIndex: Int? = chance(0.75) ? int(0, frames.count - 1) : nil
     let size = CGSize(width: int(300, 1400), height: int(200, 900))
     let anchor = anchorIndex.map { frames[$0] }
@@ -256,7 +361,8 @@ encoder.outputFormatting = [.sortedKeys]
 FileHandle.standardOutput.write(try! encoder.encode(out.mapValues { $0.map { AnyCodable($0) } }))
 '''
 
-program = ("import Foundation\nimport CoreGraphics\n\n" + extensions + "\n\nenum L {\n" + "\n\n".join(statics) + "\n}\n" + GENERATOR)
+screens = SCREENS.replace("import CoreGraphics\n", "", 1)
+program = ("import Foundation\nimport CoreGraphics\n\n" + extensions + "\n\n" + screens + "\n\nenum L {\n" + "\n\n".join(statics) + "\n}\n" + GENERATOR)
 with tempfile.TemporaryDirectory() as tmp:
     path = os.path.join(tmp, "oracle.swift")
     open(path, "w").write(program)

@@ -12,13 +12,21 @@ public enum Direction { Left, Right, Up, Down }
 /// CGRect's intersects / insetBy (see RectD).
 public static class Layout
 {
-    /// The gap between neighbouring windows: edge snapping, new-window placement and Tidy Up.
-    public const double Gap = 20;
+    /// The gap between neighbouring windows: edge snapping, new-window placement, Tidy Up, and the
+    /// screens you build (between their windows and round their edge). Settings: 20 (the default),
+    /// 10 or none.
+    public static double Gap { get; set; } = 20;
     /// Windows closer than this to a neighbour count as one group (cluster). Tidy Up tidies each
-    /// group where it is, and keeps groups at least this far apart.
-    public const double ClusterReach = 240;
+    /// group where it is, and keeps groups at least this far apart. Small, so zones you keep apart
+    /// on purpose stay zones.
+    public const double ClusterReach = 80;
     /// Edges closer than this to lining up get lined up by Tidy Up.
     public const double AlignReach = 60;
+    /// How far away a row or column can be and still be one a dragged window centres on.
+    public const double RowSnapReach = 240;
+    /// Windows a gap or so apart (snapped side by side, or nearly) count as one screen group, if
+    /// together they fit the screen at 100% (see ScreenGroups).
+    public const double ScreenGroupReach = 40;
 
     /// Swift's `.rounded()`.
     public static double Round(double v) => Math.Round(v, MidpointRounding.AwayFromZero);
@@ -173,14 +181,17 @@ public static class Layout
     /// Push overlapping frames apart in reading order. Only ever moving right or down means it
     /// always finishes.
     /// `keep`: pairs of windows (by index) left overlapping, see OverlappingPairs.
-    public static void Separate(RectD[] frames, double gap, bool onlyOverlaps = false, ISet<(int, int)>? keep = null)
+    /// `fixedFrames`: frames that stay where they are; the others are pushed clear of them.
+    public static void Separate(RectD[] frames, double gap, bool onlyOverlaps = false, ISet<(int, int)>? keep = null,
+        ISet<int>? fixedFrames = null)
     {
-        var order = Indices(frames).OrderBy(i => frames[i].Y).ThenBy(i => frames[i].X).ToList();
+        var order = (fixedFrames?.Order() ?? Enumerable.Empty<int>()).Concat(Indices(frames)
+            .Where(i => fixedFrames?.Contains(i) != true).OrderBy(i => frames[i].Y).ThenBy(i => frames[i].X)).ToList();
         var settled = new List<(int index, RectD frame)>();
         foreach (int i in order)
         {
             var r = frames[i];
-            for (int step = 0; step < 200; step++)
+            for (int step = 0; step < (fixedFrames?.Contains(i) == true ? 0 : 200); step++)
             {
                 double reach = onlyOverlaps ? 0.5 : -gap + 0.5;
                 RectD? hit = null;
@@ -223,6 +234,173 @@ public static class Layout
                 if (frames[i].Inset(-reach / 2, -reach / 2).Intersects(frames[j].Inset(-reach / 2, -reach / 2)))
                     parent[Root(j)] = Root(i);
         return Indices(frames).Select(Root).ToArray();
+    }
+
+    // MARK: Screen groups
+
+    /// Groups of windows you've arranged to fit the screen at 100%: two or more, each within
+    /// ScreenGroupReach of the next, whose outline fits `view`. Each is one place to go to: a hop,
+    /// a click zoomed out or Ctrl+Alt+C frames the whole group, and hops between its windows while
+    /// it's on screen only move focus. Measured from the layout now, when needed.
+    public static List<int[]> ScreenGroups(IReadOnlyList<RectD> frames, SizeD view)
+    {
+        var ids = Clusters(frames, ScreenGroupReach);
+        return Indices(frames).GroupBy(i => ids[i])
+            .Select(g => g.Order().ToArray())
+            .Where(members =>
+            {
+                if (members.Length <= 1) return false;
+                var outline = members.Skip(1).Aggregate(frames[members[0]], (b, i) => b.Union(frames[i]));
+                return outline.W <= view.W + 1 && outline.H <= view.H + 1;
+            })
+            .OrderBy(g => g[0]).ToList();
+    }
+
+    // MARK: Sizes picked zoomed out
+
+    /// While you drag a window's edges zoomed out: the moving edges snap to neighbours' edges, a
+    /// gap from them, and to the widths and heights of a screen's halves and quarters (and all of
+    /// it, `size`). Returns the frame, and guide lines to show (canvas space).
+    public static (RectD frame, List<GuideLine> lines) SnapEdges(RectD f, WindowEdges edges, IReadOnlyList<RectD> all, SizeD size, double scale)
+    {
+        double reach = 10 / scale, gap = Gap;
+        var near = f.Inset(-(200 + reach), -(200 + reach));
+        var others = all.Where(o => o.Intersects(near)).ToList();
+        var screen = new RectD(0, 0, size.W, size.H);
+        double[] widths = [Screens.Frame(Slot.Full, screen, gap).W, Screens.Frame(Slot.Left, screen, gap).W];
+        double[] heights = [Screens.Frame(Slot.Full, screen, gap).H, Screens.Frame(Slot.TopLeft, screen, gap).H];
+        static double? Closest(double v, IEnumerable<double> targets, double reach)
+        {
+            double? best = null;
+            foreach (double t in targets)
+                if (Math.Abs(t - v) <= reach && (best is not double b || Math.Abs(t - v) < Math.Abs(b - v))) best = t;
+            return best;
+        }
+        var r = f;
+        var xs = new List<double>();
+        var ys = new List<double>();
+        if (edges.HasFlag(WindowEdges.Right) && Closest(r.Right, others.SelectMany(o => new[] { o.X, o.Right, o.X - gap }).Concat(widths.Select(w => r.X + w)).ToList(), reach) is double x1)
+        {
+            r = r with { W = x1 - r.X };
+            xs.Add(x1);
+        }
+        if (edges.HasFlag(WindowEdges.Left) && Closest(r.X, others.SelectMany(o => new[] { o.X, o.Right, o.Right + gap }).Concat(widths.Select(w => r.Right - w)).ToList(), reach) is double x0)
+        {
+            double maxX = r.Right;
+            r = r with { X = x0, W = maxX - x0 };
+            xs.Add(x0);
+        }
+        if (edges.HasFlag(WindowEdges.Bottom) && Closest(r.Bottom, others.SelectMany(o => new[] { o.Y, o.Bottom, o.Y - gap }).Concat(heights.Select(h => r.Y + h)).ToList(), reach) is double y1)
+        {
+            r = r with { H = y1 - r.Y };
+            ys.Add(y1);
+        }
+        if (edges.HasFlag(WindowEdges.Top) && Closest(r.Y, others.SelectMany(o => new[] { o.Y, o.Bottom, o.Bottom + gap }).Concat(heights.Select(h => r.Bottom - h)).ToList(), reach) is double y0)
+        {
+            double maxY = r.Bottom;
+            r = r with { Y = y0, H = maxY - y0 };
+            ys.Add(y0);
+        }
+        var lines = xs.Select(x => new GuideLine(new Vec(x, r.Y - 40), new Vec(x, r.Bottom + 40)))
+            .Concat(ys.Select(y => new GuideLine(new Vec(r.X - 40, y), new Vec(r.Right + 40, y)))).ToList();
+        return (r, lines);
+    }
+
+    /// Frames in `area`, or within `clearance` of it, move clear: each the shortest way out, then
+    /// any they now overlap are pushed apart (see Separate). The frames, moved.
+    public static RectD[] MakeRoom(RectD area, IReadOnlyList<RectD> others, double clearance)
+    {
+        double gap = Gap;
+        var zone = area.Inset(-clearance, -clearance);
+        var frames = new[] { zone }.Concat(others).ToArray();
+        var keep = OverlappingPairs(frames).Where(p => p.Item1 != 0).ToHashSet();
+        for (int i = 1; i < frames.Length; i++)
+        {
+            if (!frames[i].Inset(0.5, 0.5).Intersects(zone)) continue;
+            var r = frames[i];
+            Vec[] moves =
+            [
+                new(zone.X - gap - r.Right, 0), new(zone.Right + gap - r.X, 0),
+                new(0, zone.Y - gap - r.Bottom), new(0, zone.Bottom + gap - r.Y),
+            ];
+            frames[i] = r.Offset(moves.MinBy(m => Math.Abs(m.X) + Math.Abs(m.Y)));
+        }
+        Separate(frames, gap, onlyOverlaps: true, keep: keep, fixedFrames: new HashSet<int> { 0 });
+        return frames.Skip(1).ToArray();
+    }
+
+    // MARK: The snap after a scroll
+
+    /// How far to move the view after a scroll at 100%: the least that leaves the fewest windows
+    /// cut off by the edges of `screen`, and at least one whole. `frames` are in view space. Each
+    /// move tried puts the edge of a window on screen a gap in from the screen's, which (windows
+    /// being a gap apart) also takes the next one just out of sight, or centres a window with less
+    /// than two gaps to spare. None further than half the screen: you scrolled here, so the view
+    /// stays near.
+    /// `travel`: which way the scroll moved the view's contents. The snap may carry on that way,
+    /// but back the way you came only a tidying 40 px (two gaps), and across it no more than that
+    /// either: further, and a window you were scrolling away from pulled you back to it every time
+    /// you stopped. `wheel`: after a mouse wheel's scroll, only on your way and no more than 40 px:
+    /// the snap after each notch put the view straight back (or leapt to the next window), so a
+    /// wheel turned a notch at a time went nowhere.
+    public static Vec SnappedMove(IReadOnlyList<RectD> frames, RectD screen, Vec? travel = null, bool wheel = false)
+    {
+        var shown = frames.Where(r => r.Intersects(screen)).ToList();
+        if (!shown.Any(r => !screen.Contains(r))) return new Vec(0, 0);
+        double g = Gap;
+        // Moves along one side that line a window up with the screen (`from`, `to`: its edges). One
+        // with less than two gaps to spare is centred: lined up with an edge instead, it sat a few
+        // pixels off one side, which the shorter move picked.
+        IEnumerable<double> Moves(double from, double to, double start, double length)
+        {
+            double spare = length - (to - from);
+            return spare < 2 * g ? [start + spare / 2 - from] : [start + g - from, start + length - g - to];
+        }
+        bool Allowed(double d, double? went, double reach)
+        {
+            if (Math.Abs(d) > reach) return false;
+            if (went is not double w) return true;
+            const double tidy = 40;
+            if (wheel) return d == 0 || (Math.Abs(d) <= tidy && d * w > 0);
+            return Math.Abs(d) <= tidy || (Math.Abs(w) >= 1 && d * w > 0);
+        }
+        var xs = shown.SelectMany(r => Moves(r.X, r.Right, screen.X, screen.W)).Prepend(0).Where(d => Allowed(d, travel?.X, screen.W / 2)).ToList();
+        var ys = shown.SelectMany(r => Moves(r.Y, r.Bottom, screen.Y, screen.H)).Prepend(0).Where(d => Allowed(d, travel?.Y, screen.H / 2)).ToList();
+        // How cut off a window is along one side: 0 whole or out of sight, 0.5 half on screen. One
+        // too big for the screen that way counts as whole.
+        static double Cut(double visible, double length, double screen)
+        {
+            if (length <= 0 || length > screen) return 0;
+            double f = Math.Max(0, Math.Min(visible / length, 1));
+            return Math.Min(f, 1 - f);
+        }
+        // Lower is better: none whole, then how much is cut off and how far the view moves.
+        (bool noneWhole, double cut) Cost(double dx, double dy)
+        {
+            bool whole = false;
+            double cuts = 0;
+            foreach (var r in frames)
+            {
+                var o = r.Offset(new Vec(dx, dy));
+                // Out of sight, just touching the screen's edge included.
+                if (!o.Intersects(screen)) continue;
+                whole |= screen.Contains(o);
+                double vw = Math.Min(o.Right, screen.Right) - Math.Max(o.X, screen.X);
+                double vh = Math.Min(o.Bottom, screen.Bottom) - Math.Max(o.Y, screen.Y);
+                cuts += Cut(vw, o.W, screen.W) + Cut(vh, o.H, screen.H);
+            }
+            // Of two that leave as much cut off, the shorter move.
+            return (!whole, cuts + 0.5 * (Math.Abs(dx) / screen.W + Math.Abs(dy) / screen.H));
+        }
+        var best = (dx: 0.0, dy: 0.0, cost: Cost(0, 0));
+        foreach (double dx in xs)
+            foreach (double dy in ys)
+            {
+                var c = Cost(dx, dy);
+                if ((!c.noneWhole && best.cost.noneWhole) || (c.noneWhole == best.cost.noneWhole && c.cut < best.cost.cut - 0.001))
+                    best = (dx, dy, c);
+            }
+        return new Vec(best.dx, best.dy);
     }
 
     // MARK: Tidy Up
@@ -350,7 +528,7 @@ public static class Layout
     public static Vec? FreeSpot(SizeD size, RectD? anchor, IReadOnlyList<RectD> others, Vec target, RectD visible, bool onScreenOnly)
     {
         if (others.Count == 0) return null;
-        const double gap = Gap;
+        double gap = Gap;
         double above = anchor?.Y ?? target.Y;
         // (origin, score bias, ranked by distance to the anchor?)
         var candidates = new List<(Vec origin, double bias, bool byDistance)>();
@@ -402,7 +580,7 @@ public static class Layout
     {
         double firm = 10 / scale;
         double soft = firm / 2;
-        const double gap = Gap;
+        double gap = Gap;
         Candidate? bestX = null, bestY = null;
 
         void Consider(double a, double b, double? line, ref Candidate? best, bool centre = false, RectD? span = null)
@@ -430,7 +608,7 @@ public static class Layout
         Consider(f.MidY, mid.Y, mid.Y, ref bestY, span: new RectD(f.X, mid.Y, f.W, 0));
 
         // Centre on a whole neighbouring row (above / below) or column (left / right).
-        const double reach = ClusterReach;
+        const double reach = RowSnapReach;
         RectD wide = f.Inset(-reach, 0), tall = f.Inset(0, -reach);
         var below = others.Where(o => o.Y >= f.Bottom - 1 && o.Y - f.Bottom <= reach && o.Intersects(wide.Inset(0, -reach))).ToList();
         var above = others.Where(o => o.Bottom <= f.Y + 1 && f.Y - o.Bottom <= reach && o.Intersects(wide.Inset(0, -reach))).ToList();

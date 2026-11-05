@@ -3,7 +3,7 @@ using Expanse;
 
 // The layout maths' tests: `scripts/vm.sh test` (or `dotnet run --project src/Layout.Tests`).
 //  1. The nearest-window rule, case by case (the same cases as the Hyprland port's).
-//  2. Every function against the Mac app's own Swift, on the random layouts in
+//  2. Every function (and the screens you build) against the Mac app's own Swift, on the random layouts in
 //     tests/layout-fixtures.json (made by scripts/layout-oracle.py). Results must match exactly.
 int failures = 0, passes = 0;
 
@@ -170,6 +170,117 @@ foreach (var (c, i) in root.GetProperty("snap").EnumerateArray().Select((c, i) =
     Check("snap", i, frame == R(want.GetProperty("frame")) && lines.SequenceEqual(wantLines),
         $"want {R(want.GetProperty("frame"))} {string.Join(" ", wantLines)}, got {frame} {string.Join(" ", lines)}");
 }
+
+static Vec V(JsonElement e) => new(e[0].GetDouble(), e[1].GetDouble());
+static SizeD Z(JsonElement e) => new(e[0].GetDouble(), e[1].GetDouble());
+static Slot S(string name) => Enum.Parse<Slot>(name, ignoreCase: true);
+static string? Opt(JsonElement e) => e.ValueKind == JsonValueKind.Null ? null : e.GetString();
+void Each(string fn, Action<JsonElement, int> run)
+{
+    foreach (var (c, i) in root.GetProperty(fn).EnumerateArray().Select((c, i) => (c, i))) run(c, i);
+}
+// Run with the gap the case was made with (Settings' 20, 10 or none).
+void WithGap(JsonElement c, Action run)
+{
+    double saved = Layout.Gap;
+    Layout.Gap = c.TryGetProperty("gap", out var g) ? g.GetDouble() : saved;
+    run();
+    Layout.Gap = saved;
+}
+
+Each("separateFixed", (c, i) =>
+{
+    var frames = Rs(c.GetProperty("frames"));
+    Layout.Separate(frames, Layout.Gap, onlyOverlaps: true, fixedFrames: c.GetProperty("fixed").EnumerateArray().Select(v => v.GetInt32()).ToHashSet());
+    var want = Rs(c.GetProperty("want"));
+    Check("separateFixed", i, Same(frames, want), $"want {Show(want)}, got {Show(frames)}");
+});
+Each("screenGroups", (c, i) =>
+{
+    var got = Layout.ScreenGroups(Rs(c.GetProperty("frames")), Z(c.GetProperty("view")));
+    var want = c.GetProperty("want").EnumerateArray().Select(g => g.EnumerateArray().Select(v => v.GetInt32()).ToArray()).ToList();
+    string Text(List<int[]> gs) => string.Join(" ", gs.Select(g => string.Join(",", g)));
+    Check("screenGroups", i, Text(got) == Text(want), $"want {Text(want)}, got {Text(got)}");
+});
+Each("slotFrame", (c, i) =>
+{
+    var got = Screens.Frame(S(c.GetProperty("slot").GetString()!), R(c.GetProperty("screen")), c.GetProperty("gap").GetDouble());
+    Check("slotFrame", i, got == R(c.GetProperty("want")), $"want {R(c.GetProperty("want"))}, got {got}");
+});
+Each("dropZone", (c, i) =>
+{
+    var got = Screens.DropZone(V(c.GetProperty("p")), R(c.GetProperty("target")));
+    var want = Opt(c.GetProperty("want"));
+    Check("dropZone", i, got == (want == null ? null : S(want)), $"want {want}, got {got}");
+});
+Each("toolSlot", (c, i) =>
+{
+    var got = Screens.ToolSlot(V(c.GetProperty("p")), R(c.GetProperty("screen")));
+    var want = Opt(c.GetProperty("want"));
+    Check("toolSlot", i, got == (want == null ? null : S(want)), $"want {want}, got {got}");
+});
+Each("makeWay", (c, i) =>
+{
+    var got = Screens.MakeWay(S(c.GetProperty("slot").GetString()!), c.GetProperty("taken").EnumerateArray().Select(v => S(v.GetString()!)).ToList());
+    var want = c.GetProperty("want").EnumerateArray().Select(v => v.GetString()!).Select(v => v.Length == 0 ? (Slot?)null : S(v)).ToArray();
+    Check("makeWay", i, got.SequenceEqual(want), $"want {string.Join(",", want)}, got {string.Join(",", got)}");
+});
+Each("assign", (c, i) =>
+{
+    var slots = c.GetProperty("layout").EnumerateArray().Select(v => S(v.GetString()!)).ToArray();
+    var got = Screens.Assign(c.GetProperty("centres").EnumerateArray().Select(V).ToList(), new ScreenLayout("", slots));
+    var want = c.GetProperty("want").EnumerateArray().Select(v => S(v.GetString()!)).ToArray();
+    Check("assign", i, got.SequenceEqual(want), $"want {string.Join(",", want)}, got {string.Join(",", got)}");
+});
+Each("screenOrigin", (c, i) =>
+{
+    var got = Screens.ScreenOrigin(R(c.GetProperty("frame")), S(c.GetProperty("slot").GetString()!), Z(c.GetProperty("size")), c.GetProperty("gap").GetDouble());
+    Check("screenOrigin", i, got == V(c.GetProperty("want")), $"want {V(c.GetProperty("want"))}, got {got}");
+});
+Each("screenLayout", (c, i) =>
+{
+    var got = Screens.LayoutOf(Rs(c.GetProperty("frames")), Z(c.GetProperty("size")), c.GetProperty("gap").GetDouble());
+    var want = c.GetProperty("want");
+    bool ok = want.ValueKind == JsonValueKind.Null ? got == null
+        : got is var (screen, slots) && screen == R(want.GetProperty("screen"))
+          && slots.SequenceEqual(want.GetProperty("slots").EnumerateArray().Select(v => S(v.GetString()!)));
+    Check("screenLayout", i, ok, $"want {want}, got {got}");
+});
+Each("slotOf", (c, i) =>
+{
+    var got = Screens.SlotOf(R(c.GetProperty("frame")), R(c.GetProperty("screen")), c.GetProperty("gap").GetDouble());
+    var want = Opt(c.GetProperty("want"));
+    Check("slotOf", i, got == (want == null ? null : S(want)), $"want {want}, got {got}");
+});
+Each("edgesMove", (c, i) =>
+{
+    var got = ((WindowEdges)c.GetProperty("edges").GetInt32()).Move(R(c.GetProperty("start")), V(c.GetProperty("by")), new SizeD(200, 120));
+    Check("edgesMove", i, got == R(c.GetProperty("want")), $"want {R(c.GetProperty("want"))}, got {got}");
+});
+Each("snapEdges", (c, i) => WithGap(c, () =>
+{
+    var (frame, lines) = Layout.SnapEdges(R(c.GetProperty("frame")), (WindowEdges)c.GetProperty("edges").GetInt32(), Rs(c.GetProperty("all")),
+        Z(c.GetProperty("size")), c.GetProperty("scale").GetDouble());
+    var want = c.GetProperty("want");
+    var wantLines = want.GetProperty("lines").EnumerateArray()
+        .Select(l => new Layout.GuideLine(new Vec(l[0].GetDouble(), l[1].GetDouble()), new Vec(l[2].GetDouble(), l[3].GetDouble()))).ToList();
+    Check("snapEdges", i, frame == R(want.GetProperty("frame")) && lines.SequenceEqual(wantLines),
+        $"want {R(want.GetProperty("frame"))}, got {frame}");
+}));
+Each("makeRoom", (c, i) => WithGap(c, () =>
+{
+    var got = Layout.MakeRoom(R(c.GetProperty("area")), Rs(c.GetProperty("others")), c.GetProperty("clearance").GetDouble());
+    var want = Rs(c.GetProperty("want"));
+    Check("makeRoom", i, Same(got, want), $"want {Show(want)}, got {Show(got)}");
+}));
+Each("snappedMove", (c, i) => WithGap(c, () =>
+{
+    var view = Z(c.GetProperty("view"));
+    var t = c.GetProperty("travel");
+    var got = Layout.SnappedMove(Rs(c.GetProperty("frames")), new RectD(0, 0, view.W, view.H),
+        t.ValueKind == JsonValueKind.Null ? null : V(t), c.GetProperty("wheel").GetBoolean());
+    Check("snappedMove", i, got == V(c.GetProperty("want")), $"want {V(c.GetProperty("want"))}, got {got}");
+}));
 
 Console.WriteLine($"by hand: {byHand} of 15 (nearest, rounding)");
 foreach (var (fn, (p, t)) in counts) Console.WriteLine($"{fn,-17} {p,5} of {t,5} match the Swift");
