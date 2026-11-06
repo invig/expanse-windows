@@ -77,6 +77,9 @@ if (!RegisterHotKey(overlay.Hwnd, Canvas.HotkeyAutoCentre, MOD_CONTROL | MOD_ALT
 
 new CommandServer(overlay.Hwnd).Start();
 Links.Register();
+// Told early when Windows signs out or restarts: windows go back before apps save where they are
+// (see Canvas.WillPowerOff).
+Kernel32.SetProcessShutdownParameters(0x3FF, 0);
 canvas.Start();
 canvas.WelcomeIfNew();
 

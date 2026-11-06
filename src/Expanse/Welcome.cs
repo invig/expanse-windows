@@ -26,6 +26,8 @@ static class Welcome
         ("Drag", "Move windows; they snap into place"),
         ("Shift + click", "Select several, then drag or close them together"),
         ("T", "Tidy up: line up each group, where it is"),
+        ("Drop on a window's side", "Tile the two into a screen  ·  S builds one"),
+        ("Drag an edge  ·  right-click", "Resize a window zoomed out  ·  Ctrl + Z undoes"),
     };
 
     /// `hotCorner`: the corner in use (a HotCorner key); `trouble`: shortcuts another app holds.
@@ -43,7 +45,7 @@ static class Welcome
         var instance = RegisterWindowClass("ExpanseWelcome", proc);
         var (monitor, work) = PrimaryMonitor();
         double k = PrimaryDpi() / 96.0;
-        int w = (int)(600 * k), h = (int)(660 * k);
+        int w = (int)(620 * k), h = (int)(724 * k);
         hwnd = CreateWindowEx(0, "ExpanseWelcome", "Welcome to Expanse", 0x00C00000 | 0x00080000 | 0x00020000, // caption, system menu, minimise
             work.Left + (work.Width - w) / 2, work.Top + (work.Height - h) / 2, w, h, 0, 0, instance, 0);
         if (hwnd == 0) { Log.Info("welcome: couldn't open"); return 0; }
@@ -127,7 +129,7 @@ static class Welcome
 
         y += Text("SHORTCUTS", Font(10.5, 600), quiet, y, x, right - x) + S(8);
         nint keyFont = Font(12, 600), whatFont = Font(13, 400);
-        int keyWidth = S(190);
+        int keyWidth = S(214);
         Gdi32.SelectObject(mem, Gdi32.GetStockObject(Gdi32.NULL_PEN));
         foreach (var (keys, what) in Shortcuts)
         {
@@ -155,7 +157,7 @@ static class Welcome
         foreach (var p in problems)
             y += Text(p, Font(12.5, 400), Gdi32.RGB(176, 72, 0), y, x, right - x) + S(6);
         y += Text("Windows puts new tray icons under ^ in the taskbar: drag Expanse's onto the taskbar to keep it in reach. " +
-                  "Find this again under the tray icon › Welcome & Shortcuts.", Font(12, 400), quiet, y, x, right - x);
+                  "Find this again from the tray icon: the ? in its panel.", Font(12, 400), quiet, y, x, right - x);
 
         // The one thing to do next.
         Gdi32.SelectObject(mem, Font(13.5, 600));

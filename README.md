@@ -56,20 +56,22 @@ Welcome window shows the shortcuts and where the hot corner is, and says if anot
 uses one of Expanse's keys.
 
 Expanse lives in the tray. Windows 11 tucks new tray icons under <kbd>^</kbd> on the taskbar:
-drag Expanse's onto the taskbar to keep it in reach, and pick **Open at Login** from its menu to
-start it with Windows.
+drag Expanse's onto the taskbar to keep it in reach. To start it with Windows, click it, then the
+gear, and turn on **Open Expanse at login**.
 
 ## The basics
 
 | Do this | To |
 |---|---|
 | Rest the pointer in a screen corner, or press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>`</kbd> | Zoom out to every window (do it again to go back) |
-| Click a window | Glide to it and start using it |
+| Click a window | Glide to it (and the windows grouped with it) and start using it |
 | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> | Hop to the next window in that direction |
 | Scroll, or pinch | Move around the canvas, and zoom |
 | Drag a window while zoomed out | Move it; it snaps into place |
+| Drop a window on another's side or corner | Tile them into halves and quarters of your screen |
+| Drag a window's edge while zoomed out, or right-click it | Resize it; Fill, Half or Quarter screen |
 | <kbd>T</kbd> | Tidy up: each group of windows lined up and evenly spaced, where it is |
-| <kbd>Esc</kbd> | Back to 100% |
+| <kbd>Esc</kbd> | Back to 100%, to the window you were in |
 
 <kbd>`</kbd> is the key below <kbd>Esc</kbd>, whatever your keyboard layout.
 
@@ -87,6 +89,10 @@ start it with Windows.
 | Click or drag in the minimap | Move the view there |
 | Drag on empty canvas, <kbd>Shift</kbd>-click, or <kbd>Ctrl</kbd> + <kbd>A</kbd> | Select windows, then drag any of them to move the group |
 | Hold <kbd>Ctrl</kbd> while dragging | Move without snapping |
+| <kbd>S</kbd> | With 2 to 4 windows selected, make a screen of them; with none, the screen tool: click a slot and a window, in either order, then <kbd>Return</kbd> |
+| Drag the ring round a screen, or the gap between its windows | Move the whole screen |
+| Right-click with several selected | Same width, same height, same size |
+| <kbd>Ctrl</kbd> + <kbd>Z</kbd> | Undo the last screen or size |
 | <kbd>0</kbd> · <kbd>1</kbd> · <kbd>-</kbd> · <kbd>=</kbd> | Fit everything · 100% · zoom out · zoom in |
 | Arrow keys · <kbd>Return</kbd> | Move the highlight · dive into the highlighted window |
 | Hover <kbd>×</kbd>, or <kbd>Ctrl</kbd> + <kbd>W</kbd> | Close the window, or every selected window |
@@ -94,13 +100,19 @@ start it with Windows.
 
 </details>
 
+**Groups of windows stay together.** Arrange a few side by side so they fit the screen, and
+Expanse treats them as one place: a hop, a click or <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd>
+shows the whole group, hops between them only move focus, and hovering one zoomed out outlines it.
+
 **Virtual desktops** each have their windows on the canvas while they're the one you're on. The
 **Desktops** panel next to the minimap, at the bottom of the screen, has a tile for each: click
 one to go there (the one you're on goes back to 100%), or use <kbd>Win</kbd> + <kbd>Ctrl</kbd> +
 arrows as usual.
 
-**Maximised windows** are screen-sized windows on the canvas. Expanse lets go of the maximise to
-move one out of view, and maximises it again when you come back to it.
+**Maximised windows** are screen-sized windows on the canvas. One you maximise keeps its top-left
+where it was and the view moves to it, so the windows above and to its left aren't covered, and
+restoring it puts the view back. Expanse lets go of the maximise to move one out of view, and
+maximises it again when you come back to it.
 
 **Dialogs** stay with their window, and one asking you something while you're zoomed out
 ("Save changes?") shows over the canvas.
@@ -108,18 +120,25 @@ move one out of view, and maximises it again when you come back to it.
 **Other monitors** are yours. The canvas is the main monitor's, as on the Mac, and windows on the
 others are left alone; drag one onto the main screen and it joins the canvas where you drop it.
 
-**The tray icon** has the rest. Click it to zoom out; right-click for Pause, Tidy Up, Centre
-Current Window, Restore Layout, Restore All Windows, which corners to use, window names, the
-desktop picture, Include Admin Windows, Welcome & Shortcuts, updates, Open at Login, and
-Troubleshooting (logs for a bug report).
+<img src="docs/images/panel.jpg" alt="Expanse's panel, opened from the tray icon: a map of the canvas, Centre window and Tidy up, three switches, the hot corner, earlier layouts, and buttons for help, troubleshooting, settings and quit" width="340" align="right">
+
+**The tray icon** opens a panel with the rest: a live map that opens the canvas, Pause, Centre and
+Tidy up, which corners to use, earlier layouts to go back to, Welcome & Shortcuts, Troubleshooting
+(logs for a bug report), and Settings (opening at login, admin windows, the gap between windows,
+updates).
+
+**Prefer less movement?** Settings › Glides and zooms can make the view jump straight to where
+it's going. If Windows' Animation effects are off, Expanse does this by itself.
+
+<br clear="right">
 
 ## Questions
 
 <details>
 <summary><strong><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>`</kbd> or the arrow keys do nothing</strong></summary>
 
-Another app got there first. The Welcome window says which shortcut (tray icon › Welcome &
-Shortcuts). Some graphics drivers use <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + arrows to rotate the
+Another app got there first. The Welcome window says which shortcut (tray icon › the **?** button).
+Some graphics drivers use <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + arrows to rotate the
 screen: turn that off in the driver's settings. Meanwhile, zoom out with a screen corner or the
 tray icon, and hop with the arrow keys while zoomed out.
 
@@ -136,10 +155,12 @@ anyway**. Updates Expanse installs itself don't ask again.
 <details>
 <summary><strong>My windows ended up somewhere odd</strong></summary>
 
-Tray icon › **Restore Layout** puts them back the way they were earlier. Expanse keeps your last
-three layouts, saved at least 15 minutes apart, and a restore can be undone too. **Tidy Up**
-neatens things where they are. As a last resort, **Restore All Windows** brings every window into
-view, stacked in the middle of the screen.
+Tray icon › **Earlier layouts**: click one to put your windows back the way they were then. Expanse
+keeps your last three, taken 15 minutes apart as you work (or when you press **Take snapshot**), and
+a restore can be undone too: the layout you had becomes the newest earlier one. **Tidy up** neatens
+things where they are: windows 80 pixels or more apart count as separate groups, so zones you keep
+apart stay apart. As a last resort, **Restore all windows** (beside Take snapshot) brings every
+window into view, stacked in the middle of the screen.
 
 </details>
 
@@ -147,8 +168,8 @@ view, stacked in the middle of the screen.
 <summary><strong>Some windows won't move (Task Manager, an admin terminal)</strong></summary>
 
 Windows doesn't let a program move the windows of one running as administrator, so Expanse leaves
-those where they are, off the canvas. To have them on it too, pick **Include Admin Windows…** from
-the tray icon: Expanse starts again as administrator, without moving anything. Windows asks first,
+those where they are, off the canvas. To have them on it too, turn on **Include admin windows** in
+Settings (tray icon, then the gear): Expanse starts again as administrator, without moving anything. Windows asks first,
 and again each time Expanse starts while it's on.
 
 </details>
@@ -156,9 +177,9 @@ and again each time Expanse starts while it's on.
 <details>
 <summary><strong>Something went wrong. How do I report it?</strong></summary>
 
-1. Tray icon › Troubleshooting › turn on **Detailed Logging**.
+1. Tray icon › the spanner (Troubleshooting) › turn on **Detailed Logging**.
 2. Make it happen again.
-3. Troubleshooting › **Copy Logs for a Bug Report**, then **Report an Issue on GitHub…** and paste
+3. The spanner › **Copy Logs for a Bug Report**, then **Report an Issue on GitHub…** and paste
    them in, with a line about what you did and what you expected.
 
 The copy says which Windows and Expanse version, your displays and settings, then the log. Window
@@ -170,11 +191,14 @@ titles are left out. Turn Detailed Logging off again once it's reported.
 <summary><strong>What does it keep, and what does it send?</strong></summary>
 
 Window pictures come straight from Windows' compositor: Expanse never captures, records or sends
-them. The one network request is a daily update check to GitHub, which you can turn off (tray icon
-› Check for Updates Automatically). Expanse's files are in `%LOCALAPPDATA%\Expanse`: its layouts
-(window positions and sizes, app names, and a scrambled fingerprint, a hash, of each window's
-title, which recognises the window without storing the title), its settings, and where your windows
-were before Expanse moved them, so they can go back. With **Detailed Logging** on, its log goes
+them. The one network request is a daily update check to GitHub, which you can turn off in Settings.
+When there's a newer release, Expanse downloads its zip from GitHub and installs it only if it's
+the file GitHub lists, the right version, and no bigger than a release should be. Expanse's files
+are in `%LOCALAPPDATA%\Expanse`: its layouts (window positions and sizes, app names, and a scrambled
+fingerprint, a hash, of each window's title, which recognises the window without storing the title),
+its settings, and where your windows were before Expanse moved them, so they can go back. The
+fingerprint is made with a secret key only your Windows account can read, so the layout file on its
+own (a copy, a backup) can't even be used to check a guessed title. With **Detailed Logging** on, its log goes
 there too (`expanse.log`, at most 5 MB): what it did with which app's windows, never their titles.
 It stays on your PC unless you copy it into a bug report yourself. In the registry, Expanse adds its
 `expanse://` link and, with Open at Login on, a startup entry.
@@ -203,6 +227,8 @@ It stays on your PC unless you copy it into a bug report yourself. In the regist
   out, <kbd>Ctrl</kbd> stands in for <kbd>⌘</kbd>.
 - The tray icon is the menu bar icon, and the Desktops panel, for virtual desktops, is the Spaces
   panel.
+- Clicking empty desktop still zooms out here: Windows can tell an icon from empty desktop, so icons
+  work and the click isn't lost.
 - Nothing to grant: Windows has no Accessibility or Screen Recording permission to ask for.
 - Maximised windows, dialogs that follow their window, and admin windows are Windows' own, and
   handled as above.
@@ -212,8 +238,8 @@ It stays on your PC unless you copy it into a bug report yourself. In the regist
 <details>
 <summary><strong>How do I uninstall it?</strong></summary>
 
-Turn off **Open at Login** in the tray icon's menu, then **Quit Expanse**: your windows go back
-where they were. Delete Expanse's folder, then its layouts and settings, and its `expanse://` link:
+Turn off **Open Expanse at login** in Settings (tray icon, then the gear), then quit with the power
+button in the panel: your windows go back where they were. Delete Expanse's folder, then its layouts and settings, and its `expanse://` link:
 
 ```powershell
 Remove-Item -Recurse "$env:LOCALAPPDATA\Expanse"
@@ -238,10 +264,14 @@ start "expanse://focus?app=Notepad"
 start "expanse://layout?snapshot=0"  # back to the newest saved layout (1, 2: older ones)
 start expanse://pause                # windows back where they were
 start expanse://resume
-start "expanse://update?install=1"   # check for an update, and install it
+start expanse://menu                 # the tray icon's panel
+start expanse://welcome
 ```
 
-Also `enter`, `exit`, `fit`, `zoom?scale=0.5`, `pan?dx=100&dy=0` and `restore`.
+Also `enter`, `exit`, `restore`, and zoomed out, `fit`, `zoom?scale=0.5` and `pan?dx=100&dy=0`.
+
+Scripts and apps run these as they are. A link from a web page runs only after Expanse asks you,
+since it could move your windows while you type into one.
 
 </details>
 

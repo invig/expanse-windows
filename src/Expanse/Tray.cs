@@ -8,16 +8,17 @@ using static Expanse.Native.User32;
 
 namespace Expanse;
 
-/// The icon in the taskbar's notification area, Expanse's menu-bar item on the Mac: click it to
-/// zoom out, right-click for the menu. The glyph is the Mac's (three grouped rectangles), drawn
+/// The icon in the taskbar's notification area, Expanse's menu-bar item on the Mac: a click opens
+/// the panel (see TrayPanel). The glyph is the Mac's (three grouped rectangles), drawn
 /// at the tray's size in black or white to suit the taskbar.
 sealed class Tray : IDisposable
 {
     public const uint WM_TRAY = WM_APP + 2;
     public readonly uint TaskbarCreated = RegisterWindowMessage("TaskbarCreated");
 
+    /// `Picture`: a screen layout to draw beside the text.
     public sealed record Item(string Text, Action? Run, bool Checked = false, bool Enabled = true,
-        IReadOnlyList<Item?>? Children = null);
+        IReadOnlyList<Item?>? Children = null, ScreenLayout? Picture = null);
 
     readonly nint hwnd;
     nint icon;
@@ -70,23 +71,32 @@ sealed class Tray : IDisposable
         if (old != 0) DestroyIcon(old);
     }
 
-    /// Our WM_TRAY callback (NOTIFYICON_VERSION_4: the event in lParam's low word, the anchor
-    /// point in wParam). Left click runs `click`; right click (or Shift+F10), or a click on a
-    /// notification, shows `menu()`.
-    public void Handle(nint wParam, nint lParam, Action click, Func<IReadOnlyList<Item?>> menu)
+    /// Our WM_TRAY callback (NOTIFYICON_VERSION_4: the event in lParam's low word). A click, a right
+    /// click (or Shift+F10), or a click on a notification runs `open`.
+    public void Handle(nint lParam, Action open)
     {
         uint ev = (uint)(lParam & 0xFFFF);
-        if (ev == Shell32.NIN_SELECT || ev == Shell32.NIN_KEYSELECT) click();
-        else if (ev == WM_CONTEXTMENU) ShowMenu((short)(wParam & 0xFFFF), (short)((wParam >> 16) & 0xFFFF), menu());
-        else if (ev == NIN_BALLOONUSERCLICK && GetCursorPos(out var p)) ShowMenu(p.X, p.Y, menu());
+        if (ev is Shell32.NIN_SELECT or Shell32.NIN_KEYSELECT or WM_CONTEXTMENU or NIN_BALLOONUSERCLICK) open();
+    }
+
+    /// Where the icon is on screen (in the overflow flyout, if that's where Windows keeps it), or
+    /// failing that the pointer.
+    public RECT IconRect()
+    {
+        var id = new Shell32.NOTIFYICONIDENTIFIER { cbSize = (uint)Marshal.SizeOf<Shell32.NOTIFYICONIDENTIFIER>(), hWnd = hwnd, uID = 1 };
+        if (Shell32.Shell_NotifyIconGetRect(ref id, out var r) == 0) return r;
+        GetCursorPos(out var p);
+        return new RECT(p.X, p.Y, p.X, p.Y);
     }
 
     const uint NIN_BALLOONUSERCLICK = 0x405;
 
-    /// `null` items are separators; items with Children open a submenu.
-    void ShowMenu(int x, int y, IReadOnlyList<Item?> items)
+    /// A menu at (x, y) on the screen, owned by `hwnd`. `null` items are separators; items with
+    /// Children open a submenu.
+    public static void Popup(nint hwnd, int x, int y, IReadOnlyList<Item?> items)
     {
         var commands = new List<Item>();
+        var bitmaps = new List<nint>();
         nint Build(IReadOnlyList<Item?> list)
         {
             nint menu = CreatePopupMenu();
@@ -101,6 +111,13 @@ sealed class Tray : IDisposable
                 }
                 commands.Add(item);
                 AppendMenu(menu, MF_STRING | state, commands.Count, item.Text);
+                if (item.Picture is ScreenLayout layout)
+                {
+                    nint bitmap = LayoutBitmap(layout);
+                    bitmaps.Add(bitmap);
+                    var info = new MENUITEMINFO { cbSize = (uint)Marshal.SizeOf<MENUITEMINFO>(), fMask = MIIM_BITMAP, hbmpItem = bitmap };
+                    SetMenuItemInfo(menu, (uint)commands.Count, false, ref info);
+                }
             }
             return menu;
         }
@@ -110,12 +127,38 @@ sealed class Tray : IDisposable
         uint picked = TrackPopupMenu(root, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, x, y, 0, hwnd, 0);
         PostMessage(hwnd, WM_NULL, 0, 0);
         DestroyMenu(root); // and its submenus
+        foreach (nint b in bitmaps) Gdi32.DeleteObject(b);
         if (picked > 0 && picked <= commands.Count)
         {
             var chosen = commands[(int)picked - 1];
-            Log.Info($"tray menu: {chosen.Text}");
+            Log.Info($"menu: {chosen.Text}");
             chosen.Run?.Invoke();
         }
+    }
+
+    /// A screen with `layout`'s slots filled, menu-sized, in the menu's text colour.
+    static nint LayoutBitmap(ScreenLayout layout)
+    {
+        double k = GetDpiForSystem() / 96.0;
+        int w = (int)(30 * k), h = (int)(19 * k);
+        using var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.Transparent);
+            using var brush = new SolidBrush(AppsAreLight() ? Color.FromArgb(40, 40, 40) : Color.FromArgb(235, 235, 235));
+            foreach (var slot in layout.Slots)
+            {
+                var f = Screens.Frame(slot, new RectD(0, 0, w, h), 1.5 * k);
+                g.FillRectangle(brush, (float)f.X, (float)f.Y, (float)f.W, (float)f.H);
+            }
+        }
+        return bmp.GetHbitmap(Color.FromArgb(0));
+    }
+
+    static bool AppsAreLight()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+        return key?.GetValue("AppsUseLightTheme") is not int v || v != 0;
     }
 
     NOTIFYICONDATA Data(uint flags) => new()

@@ -138,6 +138,8 @@ sealed class Updater(Action<Action> post)
             foreach (var asset in root.GetProperty("assets").EnumerateArray())
             {
                 if (asset.GetProperty("name").GetString() != name) continue;
+                // GitHub gives the asset's real size: one far bigger than a release isn't downloaded at all.
+                if (asset.GetProperty("size").GetInt64() > MaxDownload) return null;
                 var zip = new Uri(asset.GetProperty("browser_download_url").GetString() ?? "");
                 if (!anyHost && (zip.Scheme != Uri.UriSchemeHttps || zip.Host != "github.com")) return null;
                 string? digest = asset.TryGetProperty("digest", out var d) && d.GetString() is string s && s.StartsWith("sha256:") ? s[7..] : null;
@@ -163,6 +165,24 @@ sealed class Updater(Action<Action> post)
 
     static string Plain(string? version) => (version ?? "0").Split('+')[0].Trim();
 
+    /// A release zip is about 40 MB, about 45 MB unpacked. Anything far bigger isn't one, and isn't
+    /// unpacked: the exe is only checked once it is.
+    const long MaxDownload = 128L << 20, MaxUnpacked = 256L << 20;
+
+    /// Copies at most `limit` bytes; more than that throws (see Download's catch).
+    static async Task CopyLimited(Stream from, Stream to, long limit, TimeSpan time)
+    {
+        using var deadline = new CancellationTokenSource(time);
+        var buffer = new byte[1 << 16];
+        long total = 0;
+        for (int n; (n = await from.ReadAsync(buffer, deadline.Token)) > 0;)
+        {
+            total += n;
+            if (total > limit) throw new InvalidDataException($"more than a release ({total} bytes so far)");
+            await to.WriteAsync(buffer.AsMemory(0, n), deadline.Token);
+        }
+    }
+
     /// Downloads and unpacks `release`, and hands back its Expanse.exe if it checks out.
     static async Task<string?> Download(Release release)
     {
@@ -175,8 +195,10 @@ sealed class Updater(Action<Action> post)
             using (var response = await http.GetAsync(release.Zip, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
+                if (response.Content.Headers.ContentLength > MaxDownload) throw new InvalidDataException("more than a release");
                 await using var file = File.Create(zip);
-                await response.Content.CopyToAsync(file);
+                await using var body = await response.Content.ReadAsStreamAsync();
+                await CopyLimited(body, file, MaxDownload, TimeSpan.FromMinutes(30));
             }
             if (release.Sha256 is string expected)
             {
@@ -190,14 +212,17 @@ sealed class Updater(Action<Action> post)
             }
             using (var archive = ZipFile.OpenRead(zip))
             {
-                if (archive.GetEntry("Expanse.exe") is not ZipArchiveEntry entry) return null;
-                entry.ExtractToFile(exe);
+                if (archive.GetEntry("Expanse.exe") is not ZipArchiveEntry entry || entry.Length > MaxUnpacked) return null;
+                // A zip can claim one size and unpack to far more: counted as it comes, a minute at most.
+                await using var from = entry.Open();
+                await using var to = File.Create(exe);
+                await CopyLimited(from, to, MaxUnpacked, TimeSpan.FromMinutes(1));
             }
             File.Delete(zip);
             good = Verify(exe, release.Version);
             return good ? exe : null;
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or TaskCanceledException)
+        catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException)
         {
             Log.Info($"update download failed: {e.Message}");
             return null;

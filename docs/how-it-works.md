@@ -17,7 +17,22 @@ for DirectComposition and Direct2D. Nothing is injected into other apps.
   it, so the overlay rising changes nothing under the windows.
 - **A scroll at 100% snaps when it stops** (a 250 ms pause: a wheel's turns don't say when a scroll
   ends): the view moves on by the least that leaves at least one window whole and the fewest cut
-  off by the edges of the work area, lining a window's edge up a gap in. At most half a screen.
+  off by the edges of the work area, lining a window's edge up a gap in. At most half a screen, on
+  the way you were going; back the way you came or across it, only a tidying 40 px, so a window
+  you're scrolling away from doesn't pull you back. A mouse wheel's notches only ever snap on their
+  way, by 40 px at most.
+- **Low motion.** Every camera move goes through one animation, which in low motion ends at its first
+  frame, so what follows a move (a glide's hand-back) still runs, in the same order.
+- **Groups.** Windows within 40 px of each other that together fit the work area are one place
+  (`Layout.ScreenGroups`, measured when needed): going to one frames them all. Tidy Up's groups are
+  a looser idea (80 px), so zones you keep apart stay apart.
+- **Screens you build** are groups of a particular shape (`src/Layout/Screens.cs`): halves and
+  quarters of the work area, the gap between them and round the edge. Dropping, the S key, the
+  screen tool and the right-click sizes all come down to taking a slot's size for real, straight
+  away (the canvas hides the real window) and moving the rest clear. While an edge is dragged the
+  picture is scaled, not stretched, until the real window takes the size. Ctrl+Z restores every
+  window's frame, chosen size and home spot from before the last such change. With DWM thumbnails
+  there's nothing that can draw over the pictures, so these work without their outlines.
 - **The pictures are DWM shared thumbnail visuals:** DirectComposition visuals that DWM, Windows'
   compositor, fills with each window, in a visual tree over the overlay. Each sits at its canvas
   spot inside one canvas visual, so the camera is a single transform per frame. Expanse never
@@ -66,10 +81,23 @@ for DirectComposition and Direct2D. Nothing is injected into other apps.
   cloaked, so they leave the canvas and come back to their spots.
 - **Monitors.** The canvas is the main monitor's. A window only on another monitor is left alone;
   one moved onto the main screen joins the canvas.
+- **New windows** are noticed as they show, or as they uncloak (Store apps). One that isn't
+  takeable yet (no title) is looked at every 2 s for its first minute, and why a window showing
+  isn't on the canvas is logged once. While the mouse button is down scans wait: a tab dragged out
+  of a browser is a new window its app moves with the pointer, and it's placed beside the window
+  it came from once you let go.
+- **Maximising** keeps the window's top-left on the canvas and moves the view to where Windows put
+  it, so the windows above and to its left aren't covered; restoring it puts the view back.
 - **Locking and sleep.** While the screen is locked (`WTSRegisterSessionNotification`) or the
   displays are off (`GUID_CONSOLE_DISPLAY_STATE`), window moves aren't followed: a monitor that
   drops out as it sleeps takes its windows with it, and the Mac once had macOS pile every parked
-  window at one spot at the lock screen. Once you're back, every window goes back where it was.
+  window at one spot at the lock screen. Once you're back, every window goes back where it was. A
+  switch you make while things settle is followed (a click or key in the last 1.5 s, once windows
+  are back in place); focus Windows moves by itself isn't.
+- **Signing out, restarting or shutting down.** Expanse asks to be told early
+  (`SetProcessShutdownParameters`), and on `WM_QUERYENDSESSION` puts windows back where they were, so
+  apps save those places rather than off-screen ones, and keeps the layout for next time. If it's
+  cancelled (`WM_ENDSESSION`, or still running 3 minutes on) it carries on.
 
 ## Screens of every size
 
@@ -103,25 +131,39 @@ Restore Layout puts every window it knows exactly where the snapshot had it when
 taken on a screen of this size; on another, it fits the snapshot's home spots to this one.
 
 Windows are matched to saved spots by the same window while its app keeps running, then by app and
-title (titles are stored only as hashes), then by app; a window under a quarter of a saved one's
-size (a loading box) doesn't take its spot. Saved spots are used at launch, or for an app that has
-just started; a window a long-running app opens later is placed in free space beside you.
+title (titles are stored only as hashes, keyed with a secret in `titleKey.bin` that DPAPI encrypts
+for your account), then by app; a window under a quarter of a saved one's size (a loading box)
+doesn't take its spot. Saved spots are for a restart: windows found at launch, and apps that start in
+the 3 minutes after. Then the spots of windows that haven't come back are let go, except ones still
+out of view, so an app you quit and open later opens beside what you're working on. Windows at launch
+that the layout has no spot for go beside what's in view. Layout files are checked as they're read:
+only numbers within reason are taken. A save happens a second after the first change, not the last,
+so changes that keep coming can't put it off.
 
 ## Updates
 
 Release builds check `api.github.com/repos/invig/expanse-windows/releases/latest` a minute after
 launch and then once a day, download `Expanse-<version>-windows-<arm64|x64>.zip` for their own
-processor, and check it: the SHA-256 GitHub lists for the file, the version in the exe, and when
+processor, and check it: its size (a release is about 40 MB, and anything over 128 MB isn't fetched,
+or over 256 MB unpacked), the SHA-256 GitHub lists for the file, the version in the exe, and when
 the running copy is code-signed, the same publisher's signature (`WinVerifyTrust`). Installing
 renames the running `Expanse.exe` (Windows allows that, not overwriting it), moves the new one in,
 starts it and hands over as Include Admin Windows does; the new copy deletes the old file.
+
+## The panel and links
+
+The tray icon's panel (`TrayPanel.cs`) is drawn by hand with GDI+ into one bitmap with its alpha, over
+DWM's flyout backdrop, whole each time something changes; what you can click is worked out as it
+draws. `expanse://` links start a second Expanse that hands the link over the command pipe. It only
+passes on commands it knows, with numbers within reason, and if the program that started it is a web
+browser it asks you first. Debugging commands are off in releases.
 
 ## The code
 
 | Path | What |
 |---|---|
 | `src/Expanse` | The app |
-| `src/Layout` | The canvas maths (deriving, nearest window, Tidy Up, free spots, snapping), no Windows APIs |
+| `src/Layout` | The canvas maths (deriving, nearest window, Tidy Up, free spots, snapping, groups, screens you build), no Windows APIs |
 | `src/Layout.Tests` | Its tests: by hand, and against the Mac app's own Swift on random layouts |
 | `src/Native` | Hand-written Win32 declarations |
 | `src/Ctl` | `expansectl`: sends commands to the running app over a named pipe |

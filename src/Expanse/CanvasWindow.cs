@@ -35,6 +35,9 @@ sealed class CanvasWindow
     /// When Expanse last resized it (Environment.TickCount64): an app catching up with that isn't
     /// you choosing a size.
     public long LastSizedAt;
+    /// Until then (Environment.TickCount64) it's just been placed as it opened: found elsewhere, its
+    /// move hasn't landed yet, or its app is still setting it up. Put back, not followed.
+    public long ArrivingUntil;
 
     /// You maximised it. Windows holds a maximised window to the screen (moving it does nothing),
     /// so on the canvas it's a window the size of the work area: maximised while the camera has
@@ -179,16 +182,39 @@ sealed class CanvasWindow
     /// Alt-Tab set, minus minimised, cloaked (other virtual desktops, suspended UWP apps) and
     /// owned windows, and minus our own. Admin windows Expanse can't move (see Elevation) are
     /// left off, and listed in `admin`.
-    public static List<nint> Scan(List<nint>? admin = null)
+    /// `skipped`: windows showing that aren't taken on, and why (not owned ones: they go with their
+    /// owner), so a window that wasn't picked up can be explained afterwards.
+    public static List<nint> Scan(List<nint>? admin = null, Dictionary<nint, string>? skipped = null)
     {
         var found = new List<nint>();
         uint self = Kernel32.GetCurrentProcessId();
         EnumWindows((h, _) =>
         {
             if (Belongs(h, self, admin)) found.Add(h);
+            else if (skipped != null && WhyNot(h, self) is string why) skipped[h] = why;
             return true;
         }, 0);
         return found;
+    }
+
+    /// Why a window that's showing, with something to show for itself, isn't on the canvas. Null
+    /// for one that was never going to be: hidden, tiny, the shell's, on another virtual desktop.
+    static string? WhyNot(nint h, uint self)
+    {
+        if (!IsWindowVisible(h) || IsIconic(h) || (Style(h) & WS_CHILD) != 0 || Dwm.IsCloaked(h)) return null;
+        GetWindowThreadProcessId(h, out uint pid);
+        if (pid == self || shellClasses.Contains(ClassName(h))) return null;
+        long ex = ExStyle(h);
+        if (GetWindow(h, GW_OWNER) != 0 && (ex & WS_EX_APPWINDOW) == 0) return null;
+        var f = Dwm.FrameBounds(h);
+        bool titled = GetWindowTextLength(h) > 0;
+        // Bare overlays with no title and a big frame are common (a shell's, a game launcher's);
+        // ones with no title are only worth a look while their app may yet name them.
+        if (f.Width < 100 || f.Height < 60) return null;
+        if (!titled) return (ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) == 0 ? "it has no title (yet)" : null;
+        if ((ex & WS_EX_TOOLWINDOW) != 0) return "it's a tool window: it stays where its app puts it";
+        if ((ex & WS_EX_NOACTIVATE) != 0) return "it can't be activated: it stays where its app puts it";
+        return null;
     }
 
     /// Owned windows with a title bar (dialogs, palettes), topmost first, each with the canvas
@@ -257,7 +283,11 @@ sealed class CanvasWindow
         GetWindowThreadProcessId(h, out uint pid);
         if (pid == self) return false;
         if (Dwm.IsCloaked(h)) return false;
-        if (shellClasses.Contains(ClassName(h))) return false;
+        string cls = ClassName(h);
+        if (shellClasses.Contains(cls)) return false;
+        // The question a second Expanse asks about a link from a web page (see Links): not a window
+        // to go to, and its answer shouldn't have the view move under it.
+        if (cls == "#32770" && string.Equals(Kernel32.ProcessPath(pid), Environment.ProcessPath, StringComparison.OrdinalIgnoreCase)) return false;
         var f = Dwm.FrameBounds(h);
         if (f.Width < 40 || f.Height < 30) return false;
         if (GetWindowTextLength(h) == 0) return false;

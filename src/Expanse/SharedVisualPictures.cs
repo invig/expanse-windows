@@ -68,7 +68,7 @@ sealed class SharedVisualPictures : IPictures
     readonly IDCompositionTarget target;
     readonly IDCompositionVisual2 root, desktop, canvas, titles;
     Picture? desktopPicture;
-    readonly Strips accent, marqueeFill, guides;
+    readonly Strips accent, marqueeFill, guides, planOutlines, dropFill, dropEdge;
     readonly Dictionary<nint, MarkLayer> markLayers = new();
     IDCompositionSurface? closeSurface;
     double closeScale;
@@ -140,6 +140,9 @@ sealed class SharedVisualPictures : IPictures
         root.AddVisual(canvas, false, null);
         accent = new Strips(this, 76 / 255f, 154 / 255f, 1f);
         marqueeFill = new Strips(this, 76 / 255f, 154 / 255f, 1f, 0.12f);
+        planOutlines = new Strips(this, 76 / 255f, 154 / 255f, 1f, 0.55f);
+        dropFill = new Strips(this, 76 / 255f, 154 / 255f, 1f, 0.25f);
+        dropEdge = new Strips(this, 76 / 255f, 154 / 255f, 1f);
         device.CreateVisual(out titles);
         root.AddVisual(titles, false, null);
         guides = new Strips(this, 1f, 0.22f, 0.37f);
@@ -275,6 +278,11 @@ sealed class SharedVisualPictures : IPictures
         device.Commit();
     }
 
+    public void Preview(CanvasWindow w, double scale)
+    {
+        if (pictures.TryGetValue(w.Hwnd, out var p)) p.Visual.SetTransform(Matrix3x2.CreateScale((float)scale));
+    }
+
     /// As the Mac's canvas opens onto a fresh picture of the desktop: what's under the windows
     /// stays as it was at 100% (icons, and the desktop picture however Windows fits it), not the
     /// backdrop's copy of the picture.
@@ -311,6 +319,9 @@ sealed class SharedVisualPictures : IPictures
         titles.RemoveAllVisuals();
         accent.Set([]);
         marqueeFill.Set([]);
+        planOutlines.Set([]);
+        dropFill.Set([]);
+        dropEdge.Set([]);
         guides.Set([]);
         device.Commit();
         foreach (var p in pictures.Values)
@@ -378,6 +389,18 @@ sealed class SharedVisualPictures : IPictures
         if (marks.Marquee is RectD m) Outline(rects, m, thin);
         accent.Set(rects);
         marqueeFill.Set(marks.Marquee is RectD fill ? [fill] : []);
+
+        // A screen group's outline, and what a drop or the screen tool would do: quieter than the
+        // selection, dashed where it's only a plan.
+        var soft = new List<RectD>();
+        if (marks.GroupOutline is RectD group) Outline(soft, group, Math.Max(1, Math.Round(1.5 * scale)));
+        if (marks.DropScreen is RectD screen) Dashed(soft, screen, Math.Max(1, Math.Round(1.5 * scale)), 6 * scale, 4 * scale);
+        foreach (var slot in marks.ToolSlots) Dashed(soft, slot, thin, 4 * scale, 4 * scale);
+        planOutlines.Set(soft);
+        dropFill.Set(marks.DropSlot is RectD drop ? [drop] : []);
+        var strong = new List<RectD>();
+        if (marks.DropSlot is RectD edge) Outline(strong, edge, Math.Max(1, Math.Round(2 * scale)));
+        dropEdge.Set(strong);
 
         // Each window's ring and close button go in its mark layer, in canvas coordinates: worked
         // out in view pixels (so thicknesses stay whole pixels), then taken back through the camera.
@@ -637,6 +660,23 @@ sealed class SharedVisualPictures : IPictures
         closeScale = scale;
     }
 
+    /// Dashes along the inside of `o`, `t` thick.
+    static void Dashed(List<RectD> rects, RectD o, double t, double on, double off)
+    {
+        for (double x = o.X; x < o.Right; x += on + off)
+        {
+            double w = Math.Min(on, o.Right - x);
+            rects.Add(new RectD(x, o.Y, w, t));
+            rects.Add(new RectD(x, o.Bottom - t, w, t));
+        }
+        for (double y = o.Y + t; y < o.Bottom - t; y += on + off)
+        {
+            double h = Math.Min(on, o.Bottom - t - y);
+            rects.Add(new RectD(o.X, y, t, h));
+            rects.Add(new RectD(o.Right - t, y, t, h));
+        }
+    }
+
     /// Each title a dark pill, centred above its picture and no wider than it (cut off at the
     /// picture's width; a title only has to name the app).
     public void SetLabels(IReadOnlyList<Label> labels, double scale)
@@ -767,6 +807,9 @@ sealed class SharedVisualPictures : IPictures
         foreach (var t in titleVisuals.Values) Dispose(t);
         titleVisuals.Clear();
         accent.Dispose();
+        planOutlines.Dispose();
+        dropFill.Dispose();
+        dropEdge.Dispose();
         marqueeFill.Dispose();
         guides.Dispose();
         closeSurface?.Dispose();

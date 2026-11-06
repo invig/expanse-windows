@@ -21,6 +21,7 @@ sealed class Canvas
     readonly Wallpaper wallpaper = new();
     readonly Settings settings = Settings.Load();
     readonly Tray tray;
+    readonly TrayPanel panel;
     readonly Updater updater;
     readonly ConcurrentQueue<Action> posted = new();
     const uint WM_RUN = WM_APP + 6;
@@ -30,7 +31,13 @@ sealed class Canvas
     readonly List<CanvasWindow> windows = new();
     readonly List<Request> idleWaiters = new();
     Camera camera = Camera.Identity;
+    /// What you left when zooming out: the 100% view, the window you were in and where it was, and
+    /// whether you'd placed the view yourself. Leaving the canvas without picking a window goes
+    /// back there, however much you've moved around since: you didn't choose anywhere else.
     Camera? returnCamera;
+    CanvasWindow? returnWindow;
+    RectD? returnFrame;
+    bool returnPlaced;
     /// You moved the view at 100% yourself (dragged or scrolled it): the windows you can see are
     /// where you want them. Clicking one that's partly on screen focuses it there, and diving into
     /// one on screen keeps the view (the Mac's viewPlaced). Any glide or zoom clears it.
@@ -68,6 +75,18 @@ sealed class Canvas
     /// later that had windows last time gets their spots.
     SavedLayout? saved;
     List<SavedWindow> savedPool = new();
+    /// Saved spots are for windows coming back after a restart: at launch, and from apps that start
+    /// in the minutes after (Windows reopening them as you sign in). Then the spots of windows that
+    /// haven't come back are let go, except ones still out of view (see LetGoOfSavedSpots).
+    long restartSpotsUntil = long.MaxValue;
+    const long RestartSpotsFor = 180_000;
+    /// Windows gone in the last half minute, as saved spots. A restart quits apps before Expanse,
+    /// and the layout it saves on the way out must still have their windows (see Save); only those
+    /// whose app has quit count, and a window you just closed doesn't.
+    readonly List<(long at, SavedWindow spot)> justGone = new();
+    const long JustGoneKept = 30_000;
+    /// Paused because Windows is signing out, restarting or shutting down (see WillPowerOff).
+    bool pausedForPowerOff;
     string? lastSavedJson;
     /// When the newest snapshot was taken, and the layout as last saved (for a snapshot before
     /// restoring another).
@@ -79,6 +98,13 @@ sealed class Canvas
     bool suspendTracking;
     /// At the lock screen, or with the displays off: tracking stays suspended until you're back.
     bool screenLocked, displaysOff;
+    /// The layout is back in place after a display change (or unlocking), and the view with it, but
+    /// Windows may still move windows: their moves aren't followed, but a window that opens
+    /// meanwhile is placed as usual.
+    bool settleArmed;
+    bool Settling => suspendTracking && settleArmed && !screenLocked && !displaysOff && !active;
+    /// When you switched windows, for a switch held back while displays settle (see FocusSettled).
+    long? heldFocusAt;
     bool screenResized;
     CanvasWindow? centreAfterResize; // the window you were in when the screen changed
     SizeD? screenOverride;           // `screen W H`: pretend the screen is that size (testing)
@@ -93,8 +119,18 @@ sealed class Canvas
     /// Windows you resized by dragging an edge (Windows brackets that with MOVESIZESTART/END):
     /// their new size is the size you chose.
     readonly HashSet<nint> userSized = new();
+    /// The window you're dragging or sizing by its frame right now (MOVESIZESTART to END).
+    nint movingNow;
+    /// Maximising or restoring a window moved the view (see KeepTopLeft): every window follows.
+    bool commitAfterSync;
+    /// Visible windows not on the canvas yet, and when each was first seen: one its app hasn't
+    /// titled yet, say, is looked at again every 2 s for its first minute (see NoteSkipped).
+    readonly Dictionary<nint, long> pendingWindows = new();
+    readonly HashSet<nint> loggedSkips = new();
+    /// A scan is waiting for the mouse button to come up (logged once per press).
+    bool scanWaitingForButton;
 
-    enum DragKind { Windows, Marquee, Pan, Minimap }
+    enum DragKind { Windows, Marquee, Pan, Minimap, Resize, ToolScreen }
     readonly Minimap minimap = new();
     readonly DesktopsPanel desktopsPanel = new();
     int hoveredDesktop = -1;
@@ -111,7 +147,37 @@ sealed class Canvas
         /// A marquee keeps what was selected before it (with Shift).
         public HashSet<CanvasWindow> Base = new();
         public bool Moved;
+        /// A window's edges being dragged, and the frame it (or the screen tool's frame) started at.
+        public WindowEdges Edges;
+        public RectD StartFrame;
     }
+
+    /// Where a window dragged over another, or into a screen you built, would go (see PlanDrop): its
+    /// slot filled, the screen outlined. `Members`: the screen's windows already there, which stay.
+    sealed record DropPlan(List<(CanvasWindow w, Slot slot)> Placements, RectD Screen, RectD SlotFrame, List<CanvasWindow> Members);
+    DropPlan? dropPlan;
+
+    /// The screen tool (S with nothing selected, or New screen): a screen frame you fill by clicking
+    /// a slot then a window, or a window then a slot.
+    sealed class ScreenTool(RectD screen)
+    {
+        public RectD Screen = screen;
+        public Slot? Slot, Hover;
+        public CanvasWindow? Window;
+        /// Undo steps it has taken, so Esc can put everything back.
+        public int Steps;
+    }
+    ScreenTool? tool;
+    /// "Same size as...": the window that takes the size of the next one you click.
+    CanvasWindow? sizing;
+    /// The screen whose ring the pointer is over (see ScreenRing).
+    List<CanvasWindow>? ringGroup;
+    /// The pointer for what's under it, zoomed out (see Hover).
+    int hoverCursor = IDC_ARROW;
+    /// A short message over the canvas, and the window whose size is shown as you drag its edges.
+    string? hint;
+    CanvasWindow? sizeShown;
+    const nint HintTimer = 14;
     nint previousForeground;
     Animation? animation;
     Bench? bench;
@@ -139,6 +205,7 @@ sealed class Canvas
         overlay.Handler = Handle;
         Log.Info($"screen {monitor}, work area {work}, dpi {GetDpiForWindow(overlay.Hwnd)}");
         tray = new Tray(overlay.Hwnd);
+        panel = MakePanel();
         updater = new Updater(Post) { OnReady = UpdateReady };
         events = new WinEvents(OnWindowEvent);
         desktopInput = new DesktopInput(overlay.Hwnd);
@@ -179,8 +246,10 @@ sealed class Canvas
         ownedArrived.Clear();
         ownedLeft.Clear();
         var admin = new List<nint>();
-        var found = CanvasWindow.Scan(admin); // topmost first
+        var skipped = new Dictionary<nint, string>();
+        var found = CanvasWindow.Scan(admin, skipped); // topmost first
         NoteAdminWindows(admin);
+        NoteSkipped(skipped);
         var known = windows.ToDictionary(w => w.Hwnd);
         var next = new List<CanvasWindow>(found.Count);
         for (int i = found.Count - 1; i >= 0; i--)
@@ -218,6 +287,8 @@ sealed class Canvas
                 w.Frame = ScreenToCanvas(w.ReadScreenFrame());
                 w.Preferred = w.Frame.Size;
                 Log.Info($"window {w} at {w.Frame}");
+                // Waited for since it first showed: it's a new window, placed as one (see Arrive).
+                if (pendingWindows.Remove(h)) shownRecently.Add(h);
                 added.Add(w);
             }
             else
@@ -227,7 +298,8 @@ sealed class Canvas
                 if (!active)
                 {
                     bool zoomed = IsZoomed(h);
-                    if (zoomed != w.Maximised && !w.RestoredByUs)
+                    bool maximiseChanged = zoomed != w.Maximised && !w.RestoredByUs;
+                    if (maximiseChanged)
                     {
                         w.Maximised = zoomed;
                         w.NormalRect = null;
@@ -249,8 +321,20 @@ sealed class Canvas
                         w.LastSized = null;
                     }
                     bool atPlaced = w.Placed is POINT p && p.X == f.Left && p.Y == f.Top;
-                    if (atPlaced) w.Frame = w.Frame with { W = f.Width, H = f.Height };
-                    else if (suspendTracking)
+                    // Your drag, and the move that lands just as you let go: followed even while
+                    // displays settle (otherwise the spot stayed where the drag was last seen).
+                    bool yourDrag = movingNow == h || userSized.Contains(h);
+                    if (maximiseChanged && !suspendTracking && !OnOtherMonitorOnly(f)) KeepTopLeft(w, w.Frame.Origin, f, zoomed);
+                    else if (atPlaced) w.Frame = w.Frame with { W = f.Width, H = f.Height };
+                    else if (Environment.TickCount64 < w.ArrivingUntil && !yourDrag)
+                    {
+                        // Just placed as it opened: not you moving it. (Followed, a window lost the
+                        // spot it was given, and went back to where its app first put it.)
+                        w.Frame = w.Frame with { W = f.Width, H = f.Height };
+                        w.Placed = null;
+                        commitAfterSync = true;
+                    }
+                    else if (suspendTracking && !yourDrag)
                     {
                         // A display change: Windows moved it; it goes back where the canvas says.
                         w.Frame = w.Frame with { W = f.Width, H = f.Height };
@@ -284,6 +368,7 @@ sealed class Canvas
             // Still there, just minimised, hidden or cloaked: it'll come back to its spot.
             if (elsewhere.Contains(gone.Hwnd)) { }
             else if (IsWindow(gone.Hwnd)) departed[gone.Hwnd] = gone;
+            else if (initialSyncDone) justGone.Add((Environment.TickCount64, Away(LayoutStore.Entry(gone))));
             if (!elsewhere.Contains(gone.Hwnd)) Log.Info($"window {gone} {(IsWindow(gone.Hwnd) ? "left the canvas for now" : "gone")}");
             ownedLeft.AddRange(gone.Owned);
             gone.Owned.Clear();
@@ -383,6 +468,7 @@ sealed class Canvas
     {
         SetTimer(overlay.Hwnd, HotCornerTimer, 33, 0); // the hot corner's poll, 30 times a second
         updater.Start(() => settings.CheckForUpdates);
+        Layout.Gap = settings.ValidGap;
         ReadScreen();
         saved = LayoutStore.Load();
         if (saved != null) LayoutStore.ToDpi(saved, dpi);
@@ -398,13 +484,85 @@ sealed class Canvas
         Sync();
         if (saved?.HandOver == true) Originals.Adopt(windows);
         var open = OpenKeys();
-        int restored = windows.Count(w => TakeSavedSpot(w, open));
+        var strangers = windows.Where(w => !TakeSavedSpot(w, open)).ToList();
+        int restored = windows.Count - strangers.Count;
         // Saved on another screen, perhaps: fitted to this one from the home layout.
         if (restored > 0) FitLayoutToScreen(tidy: false, rederiving: new HashSet<nint>());
+        // Windows the saved layout has no spot for (opened since, or closed before a restart and
+        // opened again as you signed in) go beside what's in view, as a window opened later would:
+        // not where Windows put them, on top of the layout coming back.
+        if (restored > 0) PlaceStrangers(strangers);
         int moved = Commit();
         Log.Info(saved == null ? "no saved layout" : $"saved layout: {restored} of {windows.Count} windows back at their spots ({moved} moved)");
         initialSyncDone = true;
+        restartSpotsUntil = Environment.TickCount64 + RestartSpotsFor;
+        SetTimer(overlay.Hwnd, LetGoTimer, (uint)RestartSpotsFor + 1000, 0);
         Save();
+    }
+
+    /// Windows found at launch that the saved layout has no spot for: each in a free spot beside the
+    /// restored window most in view. They're moved out of the way first, so that where Windows had
+    /// them doesn't take up the spots.
+    void PlaceStrangers(List<CanvasWindow> strangers)
+    {
+        if (strangers.Count == 0) return;
+        var visible = camera.ToCanvas(new RectD(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height));
+        double Shown(CanvasWindow w)
+        {
+            double width = Math.Min(w.Frame.Right, visible.Right) - Math.Max(w.Frame.X, visible.X);
+            double height = Math.Min(w.Frame.Bottom, visible.Bottom) - Math.Max(w.Frame.Y, visible.Y);
+            return width > 0 && height > 0 ? width * height : 0;
+        }
+        var anchor = windows.Except(strangers).MaxBy(Shown);
+        foreach (var w in strangers) w.Frame = w.Frame with { X = -1e7, Y = -1e7 };
+        foreach (var w in strangers)
+        {
+            var others = windows.Where(x => x != w).Select(x => x.Frame).ToList();
+            var target = anchor?.Frame.Center ?? camera.Center(ViewSize);
+            if (Layout.FreeSpot(w.Frame.Size, anchor?.Frame, others, target, visible, onScreenOnly: false) is not Vec o)
+            {
+                w.Frame = w.Frame with { X = target.X - w.Frame.W / 2, Y = target.Y - w.Frame.H / 2 };
+                continue;
+            }
+            w.Frame = w.Frame with { X = o.X, Y = o.Y };
+            w.Home = null;
+            Log.Info($"placed {w} at {o.X:0},{o.Y:0}{(anchor != null ? $" beside {anchor}" : "")}: the saved layout has no spot for it");
+        }
+    }
+
+    /// The restart is over (see restartSpotsUntil): saved spots of windows that haven't come back
+    /// go, so a window opened later is placed beside you. Windows still out of view keep theirs.
+    void LetGoOfSavedSpots()
+    {
+        if (Environment.TickCount64 < restartSpotsUntil) return; // resumed since, which starts again
+        int before = savedPool.Count;
+        savedPool.RemoveAll(e => !LayoutStore.IsOpen(e));
+        if (savedPool.Count == before) return;
+        Log.Info($"let go of {before - savedPool.Count} saved window spots; {savedPool.Count} still out of view");
+        ScheduleSave();
+    }
+
+    static SavedWindow Away(SavedWindow e)
+    {
+        e.Away = true;
+        return e;
+    }
+
+    /// Says once, in the log, why a window that's on screen isn't on the canvas, so one that wasn't
+    /// picked up can be explained afterwards; and keeps looking at it for its first minute, every
+    /// 2 s: nothing says when a window its app was still setting up becomes an ordinary one.
+    void NoteSkipped(Dictionary<nint, string> skipped)
+    {
+        if (loggedSkips.Count > 5000) loggedSkips.Clear();
+        long now = Environment.TickCount64;
+        foreach (var (h, why) in skipped)
+        {
+            if (loggedSkips.Add(h)) Log.Info($"not on the canvas: {CanvasWindow.Describe(h)}: {why}");
+            if (initialSyncDone) pendingWindows.TryAdd(h, now);
+        }
+        foreach (var h in pendingWindows.Keys.Where(h => !skipped.ContainsKey(h) && !IsWindowVisible(h)).ToList()) pendingWindows.Remove(h);
+        if (pendingWindows.Values.Any(at => now - at < 60_000)) SetTimer(overlay.Hwnd, PendingScanTimer, 2000, 0);
+        else KillTimer(overlay.Hwnd, PendingScanTimer);
     }
 
     HashSet<(long, uint)> OpenKeys() =>
@@ -422,12 +580,17 @@ sealed class Canvas
 
     // MARK: Saving
 
-    const nint SaveTimer = 3;
+    const nint SaveTimer = 3, LetGoTimer = 11, PowerOffTimer = 12, PendingScanTimer = 13;
+    bool savePending;
 
-    /// A second after the last change, as on the Mac.
+    /// A second after the first change, so a burst of changes (a glide, a drag) is one save. Not
+    /// after the last: while changes kept coming, it was put off each time, and a size you'd just
+    /// chosen could be lost. As on the Mac.
     void ScheduleSave()
     {
-        if (initialSyncDone && !paused) SetTimer(overlay.Hwnd, SaveTimer, 1000, 0);
+        if (!initialSyncDone || paused || savePending) return;
+        savePending = true;
+        SetTimer(overlay.Hwnd, SaveTimer, 1000, 0);
     }
 
     /// `cleanExit`: windows are about to be put back where they were (quit, pause). `handOver`:
@@ -436,19 +599,35 @@ sealed class Canvas
     {
         if (paused || !initialSyncDone) return;
         HomeFromCanvas();
+        // Windows of apps that quit moments ago, newest first, in case this is a restart (see
+        // justGone); their spots go if it isn't, half a minute on.
+        long now = Environment.TickCount64;
+        justGone.RemoveAll(g => now - g.at > JustGoneKept);
+        var quit = Enumerable.Reverse(justGone).Where(g => Kernel32.Started(g.spot.Pid) == null).Select(g => g.spot);
         // Windows away (minimised, hidden) keep their spots too, and so do saved ones not open now.
         var layout = new SavedLayout
         {
             CenterX = camera.Center(ViewSize).X, CenterY = camera.Center(ViewSize).Y, CleanExit = cleanExit, HandOver = handOver,
             Dpi = canvasDpi,
             FittedWidth = fittedView?.W, FittedHeight = fittedView?.H,
-            Windows = windows.Concat(departed.Values.Where(w => IsWindow(w.Hwnd))).Select(LayoutStore.Entry)
-                .Concat(savedPool.Take(60)).ToList(),
+            Windows = windows.Select(LayoutStore.Entry)
+                .Concat(quit)
+                .Concat(departed.Values.Where(w => IsWindow(w.Hwnd)).Select(w => Away(LayoutStore.Entry(w))))
+                .Concat(savedPool.Take(60).Select(Away)).ToList(),
         };
         string? before = lastSavedJson;
         lastSavedJson = LayoutStore.Save(layout, lastSavedJson);
-        if (lastSavedJson != before && DateTime.Now - lastSnapshotAt >= LayoutStore.SnapshotSpacing) Snapshot(layout);
+        // Not with nothing on the canvas: an empty picture would push out an earlier layout worth
+        // going back to.
+        if (lastSavedJson != before && DateTime.Now - lastSnapshotAt >= LayoutStore.SnapshotSpacing && windows.Count > 0) Snapshot(layout);
         lastLayout = layout;
+    }
+
+    /// A snapshot now, because you asked, however recent the last one.
+    public void TakeSnapshot()
+    {
+        Save();
+        if (lastLayout != null && windows.Count > 0) Snapshot(lastLayout);
     }
 
     void Snapshot(SavedLayout layout)
@@ -702,7 +881,14 @@ sealed class Canvas
         var actual = new SizeD(f.Width, f.Height);
         w.LastSized = actual;
         w.LastSizedAt = Environment.TickCount64;
-        if (active) pictures.Resized(w);
+        if (active)
+        {
+            // Its picture at the new size; the caller decides where the frame goes.
+            var before = w.Frame;
+            w.Frame = before with { W = actual.W, H = actual.H };
+            pictures.Resized(w);
+            w.Frame = before;
+        }
         return actual;
     }
 
@@ -729,6 +915,7 @@ sealed class Canvas
         if (paused) return;
         centreAfterResize ??= CanvasWindowOf(GetForegroundWindow()) ?? CanvasWindowOf(lastFocusedWindow);
         suspendTracking = true;
+        settleArmed = false;
         KillTimer(overlay.Hwnd, SettleTimer);
         KillTimer(overlay.Hwnd, RelayoutTimer);
         KillTimer(overlay.Hwnd, FinalRelayoutTimer);
@@ -772,7 +959,11 @@ sealed class Canvas
             screenResized = false;
             centreAfterResize = null;
         }
-        if (final) SetTimer(overlay.Hwnd, SettleTimer, 10_000, 0);
+        if (final)
+        {
+            settleArmed = true;
+            SetTimer(overlay.Hwnd, SettleTimer, 10_000, 0);
+        }
     }
 
     /// Sizes back to what you chose (capped at this screen), the layout fitted from home; then,
@@ -783,7 +974,8 @@ sealed class Canvas
         if (screenResized && (centreAfterResize is CanvasWindow c && windows.Contains(c) ? c
                 : CanvasWindowOf(GetForegroundWindow())) is CanvasWindow w)
         {
-            camera = FocusCamera(w);
+            camera = ViewCamera(w);
+            viewPlaced = false;
             Log.Info($"display change: centred on {w}");
         }
         screenResized = false;
@@ -807,11 +999,16 @@ sealed class Canvas
             return;
         }
         if (!initialSyncDone) return;
-        // Saved spots are for windows coming back: at launch (see Start), or an app's that has just
-        // started (opening again after quitting).
-        bool mayTakeSavedSpot = JustStarted(w.Pid);
+        // Saved spots are for windows coming back after a restart (see restartSpotsUntil): at launch
+        // (see Start), or an app's when that app has just started then. A window an app opens later,
+        // or an app you quit and open again, is new: in a spot of its own beside where you are. The
+        // same window back from out of view always has its own.
+        bool mayTakeSavedSpot = (Environment.TickCount64 < restartSpotsUntil && JustStarted(w.Pid))
+            || savedPool.Any(e => e.Hwnd == w.Hwnd && e.Pid == w.Pid);
+        const long ArrivingFor = 3000;
         if (mayTakeSavedSpot && TakeSavedSpot(w, OpenKeys()))
         {
+            w.ArrivingUntil = Environment.TickCount64 + ArrivingFor;
             // An app opened now that had windows last time: quietly back to their spot (focus
             // decides whether the view goes there), as on the Mac.
             Log.Info($"{w} back at its saved spot {w.Frame}");
@@ -828,6 +1025,7 @@ sealed class Canvas
             // comes, so the view doesn't go somewhere else in between.
             double sw = spot.PW ?? spot.W, sh = spot.PH ?? spot.H;
             w.Frame = w.Frame with { X = Layout.Round(spot.X + sw / 2 - w.Frame.W / 2), Y = Layout.Round(spot.Y + sh / 2 - w.Frame.H / 2) };
+            w.ArrivingUntil = Environment.TickCount64 + ArrivingFor;
             Log.Info($"{w} is a small window of an app opening again: centred on its window's spot");
             if (!active) Place(w);
             return;
@@ -839,8 +1037,12 @@ sealed class Canvas
         var target = anchor?.Frame.Center ?? camera.Center(ViewSize);
         if (Layout.FreeSpot(w.Frame.Size, anchor?.Frame, others, target, visible, onScreenOnly: !settings.AutoCentre) is not Vec o) return;
         w.Frame = w.Frame with { X = o.X, Y = o.Y };
+        w.ArrivingUntil = Environment.TickCount64 + ArrivingFor;
         Log.Info($"placed new window {w} at {o.X:0},{o.Y:0}{(anchor != null ? $" beside {anchor}" : "")}");
         if (active) return; // its picture goes there; the window follows at the hand-back
+        // Displays changing (an app opened just after unlocking, say): it has its spot on the canvas,
+        // and the real window goes there with the rest once the layout is back in place.
+        if (suspendTracking && !Settling) return;
         if (visible.Contains(w.Frame)) Place(w);
         else Glide(w, sync: false); // a sync now would read it back from where the app opened it
     }
@@ -903,8 +1105,12 @@ sealed class Canvas
                     if (active && !gliding) Redraw();
                 }
                 break;
+            case EVENT_SYSTEM_MOVESIZESTART:
+                movingNow = hwnd;
+                break;
             case EVENT_OBJECT_LOCATIONCHANGE:
             case EVENT_SYSTEM_MOVESIZEEND:
+                if (ev == EVENT_SYSTEM_MOVESIZEEND && movingNow == hwnd) movingNow = 0;
                 // Zoomed out or gliding, windows move because we move them.
                 if (known && !active)
                 {
@@ -919,6 +1125,8 @@ sealed class Canvas
             case EVENT_SYSTEM_MINIMIZEEND:
                 if (GetAncestor(hwnd, GA_ROOT) != hwnd) break;
                 if (ev == EVENT_OBJECT_SHOW) shownRecently.Add(hwnd);
+                else if (ev == EVENT_OBJECT_UNCLOAKED && !known && !departed.ContainsKey(hwnd) && !JustChangedDesktop())
+                    shownRecently.Add(hwnd); // a Store app's new window comes out from under a cloak
                 ScheduleSync();
                 break;
             case EVENT_OBJECT_HIDE:
@@ -933,19 +1141,49 @@ sealed class Canvas
         }
     }
 
+    /// Windows also uncloak when you switch virtual desktop: those aren't new, just on one Expanse
+    /// hasn't seen yet.
+    bool JustChangedDesktop()
+    {
+        int now = VirtualDesktops.Read().current;
+        if (now != lastDesktop)
+        {
+            lastDesktop = now;
+            desktopChangedAt = Environment.TickCount64;
+        }
+        return Environment.TickCount64 - desktopChangedAt < 2000;
+    }
+    int lastDesktop = VirtualDesktops.Read().current;
+    long desktopChangedAt = -10_000;
+
     void ScheduleSync() => SetTimer(overlay.Hwnd, SyncTimer, 50, 0);
+
+    /// The left mouse button is down: you may be dragging a window, or a tab out of a browser into
+    /// a window of its own, and scans wait (see SyncLive).
+    static bool ButtonHeld => GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) != 0 ? VK_RBUTTON : VK_LBUTTON) < 0;
 
     /// Sync, and zoomed out, pictures for windows that came and none for ones that went.
     void SyncLive()
     {
         if (paused) return;
         if (gliding) { pendingSync = true; return; }
+        // Not while the mouse button is down: a tab dragged out of a browser is a new window its app
+        // moves with the pointer, and taking it on then moved it from under you. It goes beside the
+        // window it came from once you let go.
+        bool held = ButtonHeld;
+        if (held != scanWaitingForButton)
+        {
+            scanWaitingForButton = held;
+            if (held) Log.Info("scans wait: mouse button held");
+        }
+        if (held) { SetTimer(overlay.Hwnd, SyncTimer, 100, 0); return; }
         bool wasActive = active;
         var (added, removed) = Sync();
         foreach (var w in added) Arrive(w);
         shownRecently.Clear();
         userSized.Clear();
-        if (suspendTracking && !active) Commit();
+        if ((suspendTracking || commitAfterSync) && !active) Commit();
+        commitAfterSync = false;
         ScheduleSave();
         // An arrival may have started a glide, whose pictures are already up.
         if (!wasActive || gliding || (added.Count == 0 && removed.Count == 0 && ownedArrived.Count == 0 && ownedLeft.Count == 0)) return;
@@ -1002,7 +1240,37 @@ sealed class Canvas
     void FocusSettled()
     {
         nint hwnd = GetForegroundWindow();
-        if (paused || active || animation != null || hwnd == 0) return;
+        if (paused || hwnd == 0) return;
+        // The panel, Welcome, the canvas: nothing to go to.
+        GetWindowThreadProcessId(hwnd, out uint front);
+        if (front == Kernel32.GetCurrentProcessId()) return;
+        if (suspendTracking)
+        {
+            // While displays change, and for a while after (waking or unlocking is one), Windows
+            // moves focus about by itself, so only a switch you just made is followed.
+            if (screenLocked) return;
+            long now = Environment.TickCount64;
+            long? at = heldFocusAt ?? (InputSince(now - 1500) ? now : null);
+            heldFocusAt = null;
+            if (at == null)
+            {
+                Log.Info($"{CanvasWindow.Describe(hwnd)} focused while displays settle, not by you: not followed");
+                return;
+            }
+            // Windows still going back where the canvas says: followed once they're there.
+            if (!settleArmed || active)
+            {
+                if (now - at < 5000)
+                {
+                    heldFocusAt = at;
+                    SetTimer(overlay.Hwnd, FocusTimer, 500, 0);
+                }
+                return;
+            }
+        }
+        if (active || animation != null) return;
+        // A window being dragged out of its app (a tab) isn't placed yet: looked at once you let go.
+        if (ButtonHeld) { SetTimer(overlay.Hwnd, FocusTimer, 200, 0); return; }
         // Our own hand-back just focused it: the window you're in now.
         if (lastOwnFocus.hwnd == hwnd && Stopwatch.GetElapsedTime(lastOwnFocus.at).TotalSeconds < 1)
         {
@@ -1012,7 +1280,8 @@ sealed class Canvas
         var w = CanvasWindowOf(hwnd);
         if (w == null || (w.Hwnd != hwnd && w.Owned.All(o => o.Hwnd != hwnd)))
         {
-            Sync();
+            SyncLive();
+            if (active || animation != null) return; // an arrival started a glide
             w = CanvasWindowOf(hwnd);
             if (w == null) return;
         }
@@ -1059,7 +1328,7 @@ sealed class Canvas
                 Log.Info($"hop {direction} (chained) to {next}");
                 BringToFront(next);
                 glideTarget = next;
-                Animate(FocusCamera(next), 0.3, () => HandBack(next));
+                Animate(ViewCamera(next), 0.3, () => HandBack(next));
             }
             return;
         }
@@ -1075,13 +1344,15 @@ sealed class Canvas
         if (active)
         {
             hovered = target;
-            Animate(Camera.Centered(target.Frame.Center, camera.Scale, ViewSize), 0.25);
+            var outline = ScreenGroupOf(target) is { } group ? Outline(group) : target.Frame;
+            Animate(Camera.Centered(outline.Center, camera.Scale, ViewSize), 0.25);
             return;
         }
         // With auto-centre on, every hop centres its window: a hop that only moved focus to a
-        // window already on screen looked like nothing happened (as on the Mac).
+        // window already on screen looked like nothing happened (as on the Mac). Between the windows
+        // of a screen group that's on screen, only focus moves: the group is the place you're at.
         var r = camera.ToView(target.Frame);
-        if (!settings.AutoCentre && View.Inset(-1, -1).Contains(r))
+        if (HopStaysInGroup(target, from) || (!settings.AutoCentre && View.Inset(-1, -1).Contains(r)))
         {
             BringToFront(target);
             lastFocus = $"{target}: {Focus(target.Hwnd)}";
@@ -1093,9 +1364,63 @@ sealed class Canvas
     CanvasWindow? Nearest(Direction direction, RectD from) =>
         Layout.Nearest(direction, from, windows.Select(w => w.Frame).ToList()) is int i ? windows[i] : null;
 
+    // MARK: Screen groups
+
+    /// The screen group `w` is in (see Layout.ScreenGroups), or null for a window on its own.
+    List<CanvasWindow>? ScreenGroupOf(CanvasWindow w)
+    {
+        int i = windows.IndexOf(w);
+        if (i < 0) return null;
+        foreach (var g in Layout.ScreenGroups(windows.Select(x => x.Frame).ToList(), WorkSize))
+            if (g.Contains(i)) return g.Select(k => windows[k]).ToList();
+        return null;
+    }
+
+    /// The rectangle around a group's windows (canvas space).
+    static RectD Outline(IReadOnlyList<CanvasWindow> group) => group.Skip(1).Aggregate(group[0].Frame, (b, w) => b.Union(w.Frame));
+
+    /// A hop between two windows of a screen group that's all on screen.
+    bool HopStaysInGroup(CanvasWindow target, RectD from)
+    {
+        if (ScreenGroupOf(target) is not { } group || !group.Any(w => w.Frame == from)) return false;
+        return group.All(w => View.Inset(-1, -1).Contains(camera.ToView(w.Frame)));
+    }
+
+    /// Going to `w`: its screen group framed (centred in the work area; it fits), or the window
+    /// centred on its own (see FocusCamera).
+    Camera ViewCamera(CanvasWindow w)
+    {
+        if (ScreenGroupOf(w) is not { } group) return FocusCamera(w);
+        var outline = Outline(group);
+        double ax = work.Left - monitor.Left, ay = work.Top - monitor.Top;
+        return new Camera(new Vec(Layout.Round(outline.MidX - ax - work.Width / 2.0), Layout.Round(outline.MidY - ay - work.Height / 2.0)), 1);
+    }
+
+    // MARK: Maximising
+
+    /// You maximised a window, or restored it: it keeps its top-left on the canvas (`origin`) and
+    /// grows or shrinks from there, and the view moves to where Windows put it (`real`) instead. The
+    /// windows above and to the left of a maximised window aren't covered, and restoring it puts
+    /// the view back where it was (the Mac's Fill). The others move to match after the scan.
+    void KeepTopLeft(CanvasWindow w, Vec origin, RECT real, bool maximised)
+    {
+        var before = camera.Origin;
+        w.Frame = new RectD(origin.X, origin.Y, real.Width, real.Height);
+        camera.Origin = new Vec(origin.X - (real.Left - monitor.Left), origin.Y - (real.Top - monitor.Top));
+        w.Placed = new POINT(real.Left, real.Top);
+        viewPlaced = false;
+        NoteUserMove(w, origin);
+        var d = camera.Origin - before;
+        if (Math.Abs(d.X) > 0.5 || Math.Abs(d.Y) > 0.5)
+        {
+            Log.Info($"{(maximised ? "maximised" : "restored")} {w}: kept its top-left; view moved by {d.X:0}, {d.Y:0}");
+            commitAfterSync = true;
+        }
+    }
+
     // MARK: Tidy Up
 
-    /// T, or the tray menu: each group of windows tidied where it is (Layout.TidyUp: overlaps
+    /// T, or the panel: each group of windows tidied where it is (Layout.TidyUp: overlaps
     /// pushed apart, edges that nearly line up lined up, gaps closed to the standard 20), shown
     /// zoomed out with every window gliding to its new spot. The real windows follow at the
     /// hand-back. (The Mac also caps window sizes at the screen here; not yet.)
@@ -1138,6 +1463,8 @@ sealed class Canvas
         if (animation != null || drag != null) return;
         Save();
         if (lastLayout != null) Snapshot(lastLayout);
+        // Undoing a screen or a size afterwards would mix the two layouts.
+        undoSteps.Clear();
         LayoutStore.ToDpi(layout, canvasDpi);
         var pool = layout.Windows.ToList();
         var open = OpenKeys();
@@ -1175,6 +1502,8 @@ sealed class Canvas
     /// the selection with Shift.
     void Press(Vec p, bool shift)
     {
+        if (sizing != null) { FinishSizing(p); return; }
+        if (tool != null && !desktopsPanel.Panel.Contains(p) && !minimap.Panel.Contains(p)) { ToolClick(p); return; }
         if (desktopsPanel.Panel.Contains(p))
         {
             // The Desktops panel: a tile goes to that desktop (its windows come onto the canvas).
@@ -1197,6 +1526,13 @@ sealed class Canvas
             CentreOn(minimap.CanvasPoint(p));
         }
         else if (spaceHeld) drag = new Drag(DragKind.Pan, p);
+        else if (!shift && ResizeHandle(p) is var (sized, edges))
+        {
+            selected.Clear();
+            BringToFront(sized);
+            drag = new Drag(DragKind.Resize, p) { Clicked = sized, Edges = edges, StartFrame = sized.Frame };
+            SetCursor(LoadCursor(0, ResizeCursor(edges)));
+        }
         else if (WindowAt(p) is CanvasWindow w)
         {
             double k = UiScale;
@@ -1215,6 +1551,14 @@ sealed class Canvas
             if (group.Count == 1) selected.Clear();
             foreach (var g in group) BringToFront(g);
             drag = new Drag(DragKind.Windows, p) { Clicked = w, Moving = group.Select(g => (g, g.Frame)).ToList() };
+        }
+        else if (!shift && ScreenRing(p) is { } ring)
+        {
+            // A screen's ring: the whole screen moves (a click without moving goes to it).
+            selected.Clear();
+            foreach (var g in ring) BringToFront(g);
+            drag = new Drag(DragKind.Windows, p) { Clicked = ring[0], Moving = ring.Select(g => (g, g.Frame)).ToList() };
+            SetCursor(LoadCursor(0, IDC_SIZEALL));
         }
         else
         {
@@ -1254,13 +1598,41 @@ sealed class Canvas
                 Redraw();
                 return;
             }
+            case DragKind.ToolScreen:
+                d.Moved = true;
+                if (tool != null)
+                    tool.Screen = d.StartFrame.Offset(new Vec(Layout.Round((p.X - d.StartPoint.X) / camera.Scale), Layout.Round((p.Y - d.StartPoint.Y) / camera.Scale)));
+                Redraw();
+                return;
+            case DragKind.Resize:
+            {
+                if (!d.Moved && p.DistanceTo(d.StartPoint) < 3) return;
+                d.Moved = true;
+                var w = d.Clicked!;
+                var minimum = new SizeD(200 * UiScale, 120 * UiScale);
+                var moved = d.Edges.Move(d.StartFrame, new Vec((p.X - d.StartPoint.X) / camera.Scale, (p.Y - d.StartPoint.Y) / camera.Scale), minimum);
+                var (frame, edgeLines) = snap
+                    ? Layout.SnapEdges(moved, d.Edges, windows.Where(x => x != w).Select(x => x.Frame).ToList(), WorkSize, camera.Scale)
+                    : (moved, new List<Layout.GuideLine>());
+                w.Frame = d.Edges.Move(frame, new Vec(0, 0), minimum);
+                // Undistorted while the frame changes; the real window catches up when you let go.
+                pictures.Preview(w, Math.Min(w.Frame.W / d.StartFrame.W, w.Frame.H / d.StartFrame.H));
+                PictureMoved(w);
+                ShowGuides(edgeLines);
+                sizeShown = w;
+                hovered = w;
+                Relayout();
+                return;
+            }
         }
         if (!d.Moved && p.DistanceTo(d.StartPoint) < 3) return;
         d.Moved = true;
         var bounds = d.Moving.Skip(1).Aggregate(d.Moving[0].start, (b, m) => b.Union(m.start));
         var proposed = bounds.Offset(new Vec((p.X - d.StartPoint.X) / camera.Scale, (p.Y - d.StartPoint.Y) / camera.Scale));
         var moving = d.Moving.Select(m => m.w).ToHashSet();
-        var (snapped, lines) = snap
+        // Over a drop zone a window follows the pointer, unsnapped (Ctrl turns both off).
+        dropPlan = snap && d.Moving.Count == 1 && selected.Count == 0 ? PlanDrop(d.Clicked!, p) : null;
+        var (snapped, lines) = snap && dropPlan == null
             ? Layout.Snap(proposed, windows.Where(w => !moving.Contains(w)).Select(w => w.Frame).ToList(), camera.Scale, camera.Center(ViewSize))
             : (proposed, new List<Layout.GuideLine>());
         foreach (var (w, start) in d.Moving)
@@ -1281,8 +1653,28 @@ sealed class Canvas
         ShowGuides(new());
         marquee = null;
         minimap.Frozen = false;
+        var dropped = dropPlan;
+        dropPlan = null;
+        sizeShown = null;
         switch (d.What)
         {
+            case DragKind.Windows when d.Moved && dropped != null && click:
+                // From where it started: Ctrl+Z puts it back there, not where you let go.
+                d.Clicked!.Frame = d.Moving[0].start;
+                PictureMoved(d.Clicked);
+                Arrange(dropped.Placements, dropped.Screen.Origin, dropped.Members, "drop");
+                break;
+            case DragKind.Resize:
+                pictures.Preview(d.Clicked!, 1);
+                if (d.Moved)
+                {
+                    // From where it started, so Ctrl+Z puts it back there.
+                    var target = d.Clicked!.Frame;
+                    d.Clicked.Frame = d.StartFrame;
+                    PictureMoved(d.Clicked);
+                    if (click) ResizeWindow(d.Clicked, target.Size, target.Origin, "handle");
+                }
+                break;
             case DragKind.Windows when d.Moved:
                 Log.Info(d.Moving.Count == 1 ? $"dragged {d.Clicked} to {d.Clicked!.Frame}"
                     : $"dragged {d.Moving.Count} windows by {d.Clicked!.Frame.X - d.Moving.First(m => m.w == d.Clicked).start.X:0},{d.Clicked.Frame.Y - d.Moving.First(m => m.w == d.Clicked).start.Y:0}");
@@ -1306,13 +1698,11 @@ sealed class Canvas
 
     // MARK: Camera, by hand
 
-    /// Wheel, pinch, Space-drag and the zoom keys. You moved the camera yourself, so Esc now goes
-    /// back to 100% where you're looking, not where you were (the Mac's cameraMovedByUser).
+    /// Wheel, pinch, Space-drag and the zoom keys.
     void PanBy(Vec d)
     {
         CancelAnimation();
         camera.Pan(d);
-        returnCamera = null;
         viewPlaced = Math.Abs(camera.Scale - 1) < 0.001;
         if (drag == null) HoverAtCursor();
         Relayout();
@@ -1322,7 +1712,6 @@ sealed class Canvas
     {
         CancelAnimation();
         camera.Zoom(camera.Scale * factor, anchor);
-        returnCamera = null;
         viewPlaced = false;
         HoverAtCursor();
         Relayout();
@@ -1333,7 +1722,6 @@ sealed class Canvas
     {
         CancelAnimation();
         camera = Camera.Centered(c, camera.Scale, ViewSize);
-        returnCamera = null;
         Relayout();
     }
 
@@ -1343,7 +1731,6 @@ sealed class Canvas
         CancelAnimation();
         var target = camera;
         target.Zoom(scale, new Vec(ViewSize.X / 2, ViewSize.Y / 2));
-        returnCamera = null;
         viewPlaced = false;
         Animate(target, 0.22);
     }
@@ -1388,89 +1775,46 @@ sealed class Canvas
     {
         var screen = new Vec((short)(at & 0xFFFF), (short)((at >> 16) & 0xFFFF));
         double step = 0.5 * UiScale; // 60 px a notch at 100%
-        if (horizontal) PanBy(new Vec(-delta * step, 0));
+        Vec d;
+        if (horizontal) d = new Vec(-delta * step, 0);
         else if (ctrl) { ZoomBy(Math.Pow(1.2, delta / 120.0), new Vec(screen.X - monitor.Left, screen.Y - monitor.Top)); return; }
-        else if (shift) PanBy(new Vec(delta * step, 0));
-        else PanBy(new Vec(0, delta * step));
-        // A wheel's turns (and a touchpad's) say nothing of when the scroll ends: a pause is the end.
+        else if (shift) d = new Vec(delta * step, 0);
+        else d = new Vec(0, delta * step);
+        PanBy(d);
+        scrollTravel += d;
+        // A mouse wheel turns in whole notches; a touchpad's scroll comes in small steps.
+        if (delta % 120 != 0) scrollIsWheel = false;
+        // Neither says when the scroll ends: a pause is the end.
         SetTimer(overlay.Hwnd, ScrollEndTimer, 250, 0);
     }
+
+    /// How far the scroll under way has moved the view's contents, and whether it's a mouse wheel's
+    /// (see Layout.SnappedMove).
+    Vec scrollTravel;
+    bool scrollIsWheel = true;
 
     const nint ScrollEndTimer = 10;
 
     /// A scroll at 100% has ended: if it left windows cut off by the screen's edges, the view moves
-    /// on a little, to where they're whole or out of sight (see SnappedCamera). As on the Mac.
+    /// on a little, to where they're whole or out of sight (see Layout.SnappedMove). As on the Mac.
     void ScrollEnded()
     {
+        var travel = scrollTravel;
+        bool wheel = scrollIsWheel;
+        scrollTravel = new Vec(0, 0);
+        scrollIsWheel = true;
         if (!active || gliding || animation != null || drag != null || Math.Abs(camera.Scale - 1) >= 0.001) return;
-        var target = SnappedCamera();
+        var move = Layout.SnappedMove(windows.Select(w => camera.ToView(w.Frame)).ToList(), WorkRect, travel, wheel);
+        var target = camera;
+        target.Pan(move);
+        target.Origin = new Vec(Layout.Round(target.Origin.X), Layout.Round(target.Origin.Y));
         if (target.Origin == camera.Origin) return;
         Log.Info($"scroll ended: view snapped by {camera.Origin.X - target.Origin.X:0}, {camera.Origin.Y - target.Origin.Y:0}");
         Animate(target, 0.25);
     }
 
-    /// The view at 100%, moved by the least that leaves the fewest windows cut off by the edges of
-    /// the work area (where they'll be at 100%), and at least one whole. Each move tried puts the
-    /// edge of a window on screen a gap in from the screen's, which (windows being a gap apart) also
-    /// takes the next one just out of sight, or centres a window with less than that to spare (one
-    /// filling the screen, say). None further than half the screen: you scrolled here, so the view
-    /// stays near.
-    Camera SnappedCamera()
-    {
-        var screen = new RectD(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height);
-        var frames = windows.Select(w => camera.ToView(w.Frame)).ToList();
-        var shown = frames.Where(r => r.Intersects(screen)).ToList();
-        if (!shown.Any(r => !screen.Contains(r))) return camera;
-        const double g = Layout.Gap;
-        // Moves along one side that line a window up with the screen (`from`, `to`: its edges).
-        static IEnumerable<double> Moves(double from, double to, double start, double length)
-        {
-            double spare = length - (to - from);
-            yield return start + g - from;
-            yield return start + length - g - to;
-            if (spare < 2 * g) yield return start + spare / 2 - from;
-        }
-        var xs = shown.SelectMany(r => Moves(r.X, r.Right, screen.X, screen.W)).Prepend(0).Where(d => Math.Abs(d) <= screen.W / 2).ToList();
-        var ys = shown.SelectMany(r => Moves(r.Y, r.Bottom, screen.Y, screen.H)).Prepend(0).Where(d => Math.Abs(d) <= screen.H / 2).ToList();
-        // How cut off a window is along one side: 0 whole or out of sight, 0.5 half on screen. One
-        // too big for the screen that way counts as whole.
-        static double Cut(double visible, double length, double screen)
-        {
-            if (length <= 0 || length > screen) return 0;
-            double f = Math.Clamp(visible / length, 0, 1);
-            return Math.Min(f, 1 - f);
-        }
-        // Lower is better: none whole, then how much is cut off and how far the view moves.
-        (bool noneWhole, double cut) Cost(double dx, double dy)
-        {
-            bool whole = false;
-            double cuts = 0;
-            foreach (var r in frames)
-            {
-                var o = r.Offset(new Vec(dx, dy));
-                // Out of sight, just touching the screen's edge included.
-                if (!o.Intersects(screen)) continue;
-                whole |= screen.Contains(o);
-                double vw = Math.Min(o.Right, screen.Right) - Math.Max(o.X, screen.X);
-                double vh = Math.Min(o.Bottom, screen.Bottom) - Math.Max(o.Y, screen.Y);
-                cuts += Cut(vw, o.W, screen.W) + Cut(vh, o.H, screen.H);
-            }
-            // Of two that leave as much cut off, the shorter move.
-            return (!whole, cuts + 0.5 * (Math.Abs(dx) / screen.W + Math.Abs(dy) / screen.H));
-        }
-        var best = (dx: 0.0, dy: 0.0, cost: Cost(0, 0));
-        foreach (double dx in xs)
-            foreach (double dy in ys)
-            {
-                var c = Cost(dx, dy);
-                if ((!c.noneWhole && best.cost.noneWhole) || (c.noneWhole == best.cost.noneWhole && c.cut < best.cost.cut - 0.001))
-                    best = (dx, dy, c);
-            }
-        var target = camera;
-        target.Pan(new Vec(best.dx, best.dy));
-        target.Origin = new Vec(Math.Round(target.Origin.X), Math.Round(target.Origin.Y));
-        return target;
-    }
+    /// The work area, in view coordinates.
+    RectD WorkRect => new(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height);
 
     // MARK: Dialogs over the canvas
 
@@ -1519,6 +1863,8 @@ sealed class Canvas
             GetWindowThreadProcessId(h, out uint pid);
             var f = Dwm.FrameBounds(h);
             if (pid == self || Dwm.IsCloaked(h) || f.Width < 100 || f.Height < 50) return true;
+            // Over the whole screen isn't a dialog: the canvas would open under it for nothing.
+            if (f.Left <= monitor.Left && f.Top <= monitor.Top && f.Right >= monitor.Right && f.Bottom >= monitor.Bottom) return true;
             found = h;
             return false;
         }, 0);
@@ -1585,7 +1931,7 @@ sealed class Canvas
         guidesOverPictures = pictures.SetGuides(lines.Select(l => (camera.ToView(l.From), camera.ToView(l.To))).ToList(), thickness);
     }
 
-    // MARK: Pause, tray menu
+    // MARK: Pause
 
     /// Puts every window back where it was before Expanse moved it and stops following them.
     public void Pause()
@@ -1598,11 +1944,37 @@ sealed class Canvas
         Log.Info("paused");
     }
 
+    /// Signing out, restarting or shutting down: apps are about to quit (Expanse asks Windows to
+    /// tell it first). Windows go back to where they were before Expanse, so that's where they
+    /// reopen (not parked off screen), and the layout is kept as it is for when Expanse starts
+    /// again. Still running a few minutes on, it was cancelled: carry on.
+    void WillPowerOff()
+    {
+        if (paused) return;
+        Log.Info("signing out or restarting: windows back where they were, layout kept for next time");
+        LeaveCanvasNow();
+        Pause();
+        pausedForPowerOff = true;
+        SetTimer(overlay.Hwnd, PowerOffTimer, 180_000, 0);
+    }
+
+    /// Back at 100% straight away, with no animation: there's no time for one.
+    void LeaveCanvasNow()
+    {
+        if (!active) return;
+        animation = null;
+        drag = null;
+        camera = LeavingCamera().camera;
+        HandBack(null);
+    }
+
     /// Like a fresh launch: the canvas comes back from the layout saved by Pause.
     public void Resume()
     {
         if (!paused) return;
         paused = false;
+        pausedForPowerOff = false;
+        KillTimer(overlay.Hwnd, PowerOffTimer);
         windows.Clear();
         departed.Clear();
         camera = Camera.Identity;
@@ -1613,56 +1985,67 @@ sealed class Canvas
         Log.Info("resumed");
     }
 
-    /// The layout snapshots, newest first: "12 minutes ago (8:30 AM)".
-    IReadOnlyList<Tray.Item?> RestoreLayoutMenu()
-    {
-        var items = LayoutStore.Snapshots().Select(s => (Tray.Item?)new Tray.Item(LayoutStore.Describe(s), () =>
-        {
-            if (LayoutStore.Load(s) is SavedLayout layout) RestoreLayout(layout);
-        })).ToList();
-        if (items.Count == 0) items.Add(new Tray.Item("No earlier layouts yet", null, Enabled: false));
-        return items;
-    }
+    // MARK: The panel
 
-    IReadOnlyList<Tray.Item?> TrayMenu() =>
-    [
-        new("Open Expanse\tCtrl+Alt+`", () => Toggle(), Enabled: !paused),
-        new(paused ? "Resume Expanse" : "Pause Expanse", () => { if (paused) Resume(); else Pause(); }),
-        null,
-        new("Centre Current Window\tCtrl+Alt+C", CentreCurrentWindow, Enabled: !paused),
-        new("Auto-Centre Focused Window\tCtrl+Alt+Shift+`", ToggleAutoCentre, settings.AutoCentre),
-        new("Desktop Picture Background", () =>
+    TrayPanel.State PanelState() => new(paused, active && !gliding, windows.Select(w => w.Frame).ToList(), camera.ToCanvas(View),
+        settings.AutoCentre, settings.Wallpaper, settings.ShowNames, settings.HotCorner, updater.Ready?.release.Version,
+        settings.DetailedLogging, File.Exists(Log.FilePath), LoginItem.IsOn, Layout.Gap, settings.Motion, settings.CheckForUpdates, Elevation.IsElevated);
+
+    TrayPanel MakePanel() => new(PanelState, new TrayPanel.Actions(
+        ToggleCanvas: Toggle,
+        SetPaused: pause => { if (pause) { LeaveCanvasNow(); Pause(); } else Resume(); },
+        CentreWindow: CentreCurrentWindow,
+        Tidy: Tidy,
+        RestoreAll: RestoreAll,
+        RestoreLayout: s => { if (LayoutStore.Load(s) is SavedLayout layout) RestoreLayout(layout); },
+        TakeSnapshot: TakeSnapshot,
+        AutoCentre: ToggleAutoCentre,
+        Wallpaper: () =>
         {
             settings.Wallpaper = !settings.Wallpaper;
             settings.Save();
-            if (active) { pictures.SetDesktop(settings.Wallpaper ? monitor : null); Redraw(); }
-        }, settings.Wallpaper),
-        new("Show Window Names", () => { settings.ShowNames = !settings.ShowNames; settings.Save(); }, settings.ShowNames),
-        new("Hot Corner", null, Children: HotCorner.Choices.Select(c => (Tray.Item?)new Tray.Item(c.title, () =>
+            if (active) { pictures.SetDesktop(settings.Wallpaper ? monitor : null); overlay.Invalidate(); Redraw(); }
+        },
+        Names: () => { settings.ShowNames = !settings.ShowNames; settings.Save(); if (active) Redraw(); },
+        Corner: corner =>
         {
-            settings.HotCorner = c.key;
+            // Off again if it's the only one lit: the dots switch.
+            settings.HotCorner = corner == settings.HotCorner && corner != "all" ? "off" : corner;
             settings.Save();
-            Log.Info($"hot corner: {c.key}");
-        }, settings.HotCorner == c.key)).ToList()),
-        new("Tidy Up Windows", Tidy, Enabled: !paused),
-        new(Elevation.IsElevated ? "Include Admin Windows" : "Include Admin Windows…", ToggleAdminWindows, Elevation.IsElevated, Enabled: !paused),
-        new("Restore Layout", null, Enabled: !paused, Children: RestoreLayoutMenu()),
-        new("Restore All Windows", RestoreAll, Enabled: !paused),
-        new("Welcome & Shortcuts…", ShowWelcome),
-        null,
-        .. UpdateMenu(),
-        new("Open at Login", () => LoginItem.Set(!LoginItem.IsOn), LoginItem.IsOn),
-        new("Troubleshooting", null, Children: new Tray.Item?[]
+            Log.Info($"hot corner: {settings.HotCorner}");
+        },
+        InstallUpdate: () => { if (active) { pendingInstall = true; Exit(null); } else InstallUpdate(); },
+        DetailedLogging: ToggleDetailedLogging,
+        CopyLogs: CopyLogs,
+        ShowLogFile: ShowLogFile,
+        ReportIssue: () => Updater.Open(BugReport.IssuesUrl),
+        OpenAtLogin: on => LoginItem.Set(on),
+        Gap: gap =>
         {
-            new("Detailed Logging", ToggleDetailedLogging, settings.DetailedLogging),
-            new("Copy Logs for a Bug Report", CopyLogs),
-            new("Show Log File", ShowLogFile, Enabled: File.Exists(Log.FilePath)),
-            null,
-            new("Report an Issue on GitHub…", () => Updater.Open(BugReport.IssuesUrl)),
-        }),
-        null,
-        new("Quit Expanse", Quit),
-    ];
+            settings.WindowGap = gap;
+            settings.Save();
+            Layout.Gap = settings.ValidGap;
+            Log.Info($"gaps between windows: {Layout.Gap}");
+        },
+        Motion: motion =>
+        {
+            settings.Motion = motion;
+            settings.Save();
+            Log.Info($"glides and zooms: {motion}");
+        },
+        AutoUpdates: on => { settings.CheckForUpdates = on; settings.Save(); },
+        CheckForUpdates: () => { if (active) Exit(null); CheckForUpdates(); },
+        AdminWindows: ToggleAdminWindows,
+        Welcome: ShowWelcome,
+        Quit: () => Quit("the panel's Quit"),
+        RestoreFocus: () =>
+        {
+            if (active) Focus(overlay.Hwnd);
+            else if (IsWindow(lastFocusedWindow)) SetForegroundWindow(lastFocusedWindow);
+        },
+        Focus: Focus));
+
+    bool pendingInstall;
 
     // MARK: Zoom out, dive in
 
@@ -1715,10 +2098,14 @@ sealed class Canvas
         Lift();
         if (zoomOut)
         {
+            var leaving = CanvasWindowOf(previousForeground) ?? CanvasWindowOf(lastFocusedWindow);
             lastOverlayFocus = Focus(overlay.Hwnd);
             Log.Info($"zoom out: {windows.Count} windows; overlay foreground {lastOverlayFocus}");
+            if (!overview) { returnCamera = null; returnWindow = null; HoverAtCursor(); return; }
             returnCamera = camera;
-            if (!overview) { HoverAtCursor(); return; }
+            returnWindow = leaving;
+            returnFrame = leaving?.Frame;
+            returnPlaced = viewPlaced;
             // The pointer may already be over a window, with no move to tell us.
             Animate(OverviewCamera(), 0.22, () =>
             {
@@ -1802,15 +2189,36 @@ sealed class Canvas
             else
             {
                 viewPlaced = false;
-                target = FocusCamera(focus);
+                target = ViewCamera(focus);
             }
         }
-        else target = returnCamera ?? Camera.Centered(camera.Center(ViewSize), 1, ViewSize);
+        else
+        {
+            var leaving = LeavingCamera();
+            if (leaving.placed is bool placed) viewPlaced = placed;
+            target = leaving.camera;
+        }
         gliding = true;
         hovered = null;
         glideTarget = focus;
         Log.Info(focus != null ? $"dive into {focus}" : "back to 100%");
         Animate(target, duration, () => HandBack(focus));
+    }
+
+    /// Where leaving the canvas without picking a window takes the view, and whether that's a view
+    /// you placed (null: as it is).
+    (Camera camera, bool? placed) LeavingCamera()
+    {
+        if (returnCamera is Camera back)
+        {
+            // Back to the window you were in, as you left it. If it moved meanwhile (you dragged it,
+            // Tidy Up), it's centred where it is now.
+            if (returnWindow is CanvasWindow w && windows.Contains(w) && returnFrame is RectD f && w.Frame.Origin != f.Origin)
+                return (ViewCamera(w), false);
+            return (back, returnPlaced);
+        }
+        // Opened at 100% (a scroll on the desktop): where you've moved the view to.
+        return (Camera.Centered(camera.Center(ViewSize), 1, ViewSize), null);
     }
 
     /// From 100%: the overlay rises at scale 1 (pictures over the real windows), the camera
@@ -1831,7 +2239,10 @@ sealed class Canvas
         var t0 = Stopwatch.GetTimestamp();
         int moved = Commit();
         int waited = WaitForMoves();
-        var target = focus ?? CanvasWindowOf(previousForeground)
+        // Back where you were: the window you were in gets the keyboard back, rather than whichever
+        // is in front there (one cut off at the edge would then be glided to).
+        var back = returnWindow != null && windows.Contains(returnWindow) && camera.ToView(returnWindow.Frame).Intersects(View) ? returnWindow : null;
+        var target = focus ?? back ?? CanvasWindowOf(previousForeground)
             ?? windows.LastOrDefault(w => camera.ToView(w.Frame).Intersects(View));
         if (target != null && IsWindow(target.Hwnd))
         {
@@ -1852,9 +2263,17 @@ sealed class Canvas
         gliding = false;
         glideTarget = null;
         returnCamera = null;
+        returnWindow = null;
         selected.Clear();
         spaceHeld = false;
+        tool = null;
+        sizing = null;
+        dropPlan = null;
+        ringGroup = null;
+        hint = null;
+        hoverCursor = IDC_ARROW;
         if (pendingRestoreAll) { pendingRestoreAll = false; RestoreAll(); }
+        if (pendingInstall) { pendingInstall = false; InstallUpdate(); }
         Log.Info($"handed back: moved {moved} windows, waited {waited} frames, {Ms(t0):0}ms");
         if (pendingSync) { pendingSync = false; SyncLive(); }
         ScheduleSave();
@@ -2104,11 +2523,24 @@ sealed class Canvas
 
     // MARK: Animation
 
+    /// Camera moves go straight to where they end (Settings' Moving around, or Windows' Animation
+    /// effects being off). Read at each move, so a change to either counts from the next one.
+    bool LowMotion => settings.Motion switch
+    {
+        "jump" => true,
+        "glide" => false,
+        _ => SystemParametersInfo(SPI_GETCLIENTAREAANIMATION, 0, out int on, 0) && on == 0,
+    };
+
     void Animate(Camera to, double duration, Action? completion = null, List<(CanvasWindow, RectD, RectD)>? moves = null)
     {
+        // Low motion: over at the first frame, so what follows a move (a glide's hand-back, say)
+        // still runs, and in the same order.
+        bool jump = LowMotion;
+        if (jump) Log.Info("low motion: the view jumps");
         animation = new Animation
         {
-            From = camera, To = to, Start = Stopwatch.GetTimestamp(), Duration = duration, Completion = completion, Moves = moves,
+            From = camera, To = to, Start = Stopwatch.GetTimestamp(), Duration = jump ? 0 : duration, Completion = completion, Moves = moves,
         };
         // GDI labels and the ring go while moving; the visual-tree ones move along (but not on a
         // glide or dive: gliding hides them).
@@ -2130,7 +2562,7 @@ sealed class Canvas
         }
         a.Frames++;
         a.LastFrame = now;
-        double t = Math.Min(1, Stopwatch.GetElapsedTime(a.Start, now).TotalSeconds / a.Duration);
+        double t = a.Duration > 0 ? Math.Min(1, Stopwatch.GetElapsedTime(a.Start, now).TotalSeconds / a.Duration) : 1;
         double e = 1 - Math.Pow(1 - t, 3); // ease-out cubic
         double s = Math.Exp(Lerp(Math.Log(a.From.Scale), Math.Log(a.To.Scale), e));
         var c0 = a.From.Center(ViewSize);
@@ -2195,6 +2627,7 @@ sealed class Canvas
                 KillTimer(overlay.Hwnd, SettleTimer);
                 if (screenLocked || displaysOff) return 0;
                 suspendTracking = false;
+                settleArmed = false;
                 Log.Info("display change settled");
                 return 0;
             case WM_SETTINGCHANGE when (int)wParam == 0x2F: // SPI_SETWORKAREA: the taskbar changed
@@ -2202,12 +2635,39 @@ sealed class Canvas
                 return null;
             case WM_TIMER when wParam == SaveTimer:
                 KillTimer(overlay.Hwnd, SaveTimer);
+                savePending = false;
                 Save();
+                return 0;
+            case WM_TIMER when wParam == LetGoTimer:
+                KillTimer(overlay.Hwnd, LetGoTimer);
+                LetGoOfSavedSpots();
+                return 0;
+            case WM_TIMER when wParam == PendingScanTimer:
+                ScheduleSync();
+                return 0;
+            case WM_TIMER when wParam == PowerOffTimer:
+                KillTimer(overlay.Hwnd, PowerOffTimer);
+                if (pausedForPowerOff && paused)
+                {
+                    Log.Info("still running: the sign-out was cancelled, so resuming");
+                    Resume();
+                }
+                return 0;
+            case WM_QUERYENDSESSION:
+                WillPowerOff();
+                return 1;
+            case WM_ENDSESSION:
+                // Somebody said no (an app with unsaved work, you): carry on now.
+                if (wParam == 0 && pausedForPowerOff && paused)
+                {
+                    Log.Info("the sign-out was cancelled: resuming");
+                    Resume();
+                }
                 return 0;
             case WM_TIMER when wParam == HotCornerTimer:
                 WatchCompositor();
                 desktopInput.Armed = !active && !paused;
-                if (!CompositorSettled) { hotCorner.Disarm(); return 0; }
+                if (!CompositorSettled || panel.IsShown) { hotCorner.Disarm(); return 0; }
                 if (!paused && !gliding && animation == null && drag == null && hotCorner.Poll(settings.HotCorner, monitor))
                 {
                     Log.Info($"hot corner ({settings.HotCorner})");
@@ -2236,11 +2696,7 @@ sealed class Canvas
                 FocusSettled();
                 return 0;
             case Tray.WM_TRAY:
-                tray.Handle(wParam, lParam, () => { if (paused) Resume(); else Toggle(); }, TrayMenu);
-                // The menu needed our (hidden) window in front; give focus back to the window you
-                // were in, unless the canvas just opened.
-                if (!active && GetForegroundWindow() == overlay.Hwnd && IsWindow(lastFocusedWindow))
-                    SetForegroundWindow(lastFocusedWindow);
+                tray.Handle(lParam, () => panel.Toggle(tray.IconRect()));
                 return 0;
             case WM_SETTINGCHANGE when lParam != 0 && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet":
                 tray.ThemeChanged();
@@ -2272,6 +2728,9 @@ sealed class Canvas
                 return 0;
             }
             case WM_LBUTTONUP:
+                // Where you let go is where a drag ends, even if the last moves before it never came.
+                if (drag is { Moved: true })
+                    DragTo(new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)), snap: ((int)wParam & MK_CONTROL) == 0);
                 EndDrag(click: true);
                 return 0;
             case WM_CAPTURECHANGED:
@@ -2289,7 +2748,7 @@ sealed class Canvas
                 return 0;
             }
             case DesktopInput.WM_DESKTOP_CLICK:
-                if (!active && !paused && !gliding &&
+                if (!active && !paused && !gliding && !panel.IsShown && !panel.JustClosed &&
                     DesktopInput.NothingSelected(new POINT((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF))))
                 {
                     Log.Info("click on the desktop");
@@ -2311,6 +2770,17 @@ sealed class Canvas
             case WM_SETCURSOR when active && (spaceHeld || drag?.What == DragKind.Pan):
                 SetCursor(LoadCursor(0, IDC_SIZEALL));
                 return 1;
+            case WM_SETCURSOR when active && !gliding && drag == null && hoverCursor != IDC_ARROW:
+                SetCursor(LoadCursor(0, hoverCursor));
+                return 1;
+            case WM_RBUTTONUP when active && !gliding && animation == null && drag == null:
+                ContextMenu(new Vec((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)));
+                return 0;
+            case WM_TIMER when wParam == HintTimer:
+                KillTimer(overlay.Hwnd, HintTimer);
+                hint = null;
+                if (active && !gliding) Redraw();
+                return 0;
             case WM_KEYUP when (int)wParam == VK_SPACE:
                 spaceHeld = false;
                 if (drag?.What != DragKind.Pan) SetCursor(LoadCursor(0, IDC_ARROW));
@@ -2321,8 +2791,27 @@ sealed class Canvas
                 bool ctrl = GetKeyState(VK_CONTROL) < 0;
                 switch ((int)wParam)
                 {
+                    case VK_ESCAPE when sizing != null:
+                        sizing = null;
+                        hoverCursor = IDC_ARROW;
+                        SetCursor(LoadCursor(0, IDC_ARROW));
+                        break;
+                    case VK_ESCAPE when tool != null: FinishTool(cancel: true); break;
                     case VK_ESCAPE when selected.Count > 0: selected.Clear(); Redraw(); break;
                     case VK_ESCAPE: Exit(null); break;
+                    case VK_Z when ctrl:
+                        if (tool != null || undoSteps.Count == 0) MessageBeep(0); else Undo();
+                        break;
+                    case VK_S when !ctrl && tool == null:
+                    {
+                        // 2-4 picked: the screens they can make. None: the screen tool, here.
+                        var picked = windows.Where(selected.Contains).ToList();
+                        if (picked.Count == 0) StartTool(camera.ToCanvas(new Vec(ViewSize.X / 2, ViewSize.Y / 2)));
+                        else if (picked.Count is >= 2 and <= 4) ShowLayouts(picked);
+                        else MessageBeep(0);
+                        break;
+                    }
+                    case VK_RETURN when tool != null: FinishTool(cancel: false); break;
                     case VK_RETURN when windows.Count > 0: Exit(hovered ?? windows[^1]); break;
                     case VK_SPACE when !spaceHeld:
                         spaceHeld = true;
@@ -2333,7 +2822,6 @@ sealed class Canvas
                     case VK_T when !ctrl: Tidy(); break;
                     case VK_0 or VK_NUMPAD0 when !ctrl:
                         CancelAnimation();
-                        returnCamera = null;
                         Animate(FitCamera(1), 0.22);
                         break;
                     case VK_1 or VK_NUMPAD1 when !ctrl: ZoomKey(1); break;
@@ -2412,11 +2900,37 @@ sealed class Canvas
         if (!active || gliding || animation != null) return;
         int desk = desktopsPanel.Panel.Contains(p) ? desktopsPanel.TileAt(p) : -1;
         if (desk != hoveredDesktop) { hoveredDesktop = desk; Redraw(); }
-        var w = minimap.Panel.Contains(p) || desktopsPanel.Panel.Contains(p) ? null : WindowAt(p);
-        if (w == hovered) return;
+        bool free = !minimap.Panel.Contains(p) && !desktopsPanel.Panel.Contains(p);
+        if (tool != null)
+        {
+            var s = free ? Screens.ToolSlot(camera.ToCanvas(p), tool.Screen) : null;
+            if (s != tool.Hover) { tool.Hover = s; Redraw(); }
+        }
+        var w = free ? WindowAt(p) : null;
+        var ring = free && w == null && tool == null ? ScreenRing(p) : null;
+        bool ringChanged = (ring == null) != (ringGroup == null) || ring?[0] != ringGroup?[0];
+        if (ringChanged) ringGroup = ring;
+        int cursor = IDC_ARROW;
+        if (sizing != null) cursor = IDC_CROSS;
+        else if (free && tool == null && ResizeHandle(p) is var (_, edges)) cursor = ResizeCursor(edges);
+        else if (ring != null) cursor = IDC_SIZEALL;
+        if (cursor != hoverCursor)
+        {
+            hoverCursor = cursor;
+            if (!spaceHeld) SetCursor(LoadCursor(0, cursor));
+        }
+        if (w == hovered && !ringChanged) return;
         hovered = w;
         Redraw();
     }
+
+    static int ResizeCursor(WindowEdges edges) => edges switch
+    {
+        WindowEdges.Left or WindowEdges.Right => IDC_SIZEWE,
+        WindowEdges.Top or WindowEdges.Bottom => IDC_SIZENS,
+        WindowEdges.Left | WindowEdges.Top or WindowEdges.Right | WindowEdges.Bottom => IDC_SIZENWSE,
+        _ => IDC_SIZENESW,
+    };
 
     /// Positions the pictures for the camera, with the titles and hover ring, and puts it all on
     /// screen at once.
@@ -2438,7 +2952,15 @@ sealed class Canvas
         }
         bool show = active && !gliding;
         double k = UiScale;
-        pictures.SetLabels(show && settings.ShowNames ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : [], k);
+        var labels = show && settings.ShowNames ? Labels().Select(l => new Label(l.w.Hwnd, LabelText(l.w), l.view)).ToList() : new List<Label>();
+        if (show && sizeShown is CanvasWindow sized)
+        {
+            // "726 x 909" under the window's bottom-right corner as you resize it.
+            var r = camera.ToView(sized.Frame);
+            labels.Add(new Label(SizeLabelId, $"{sized.Frame.W:0} \u00d7 {sized.Frame.H:0}", new RectD(r.Right - 160 * k, r.Bottom + 34 * k, 160 * k, 0)));
+        }
+        if (show && hint != null) labels.Add(new Label(HintLabelId, hint, new RectD(0, 64 * k, ViewSize.X, 0)));
+        pictures.SetLabels(labels, k);
         pictures.SetMarks(show ? CurrentMarks(k) : Marks.None, k);
         var map = show ? MinimapNow(k) : (MinimapDrawing?)null;
         pictures.SetMinimap(map, k);
@@ -2459,7 +2981,439 @@ sealed class Canvas
         var picked = windows.Where(selected.Contains).Select(w => camera.ToView(w.Frame)).ToList();
         RectD? box = picked.Count > 1 ? picked.Skip(1).Aggregate(picked[0], (a, b) => a.Union(b)) : null;
         var closes = drag == null ? windows.Where(w => CloseShown(w, hovered, k)).Select(w => (w.Hwnd, camera.ToView(w.Frame))).ToList() : [];
-        return new Marks(rings, box, marquee, closes);
+        var marks = new Marks(rings, box, marquee, closes);
+        if (picked.Count < 2 && dropPlan == null && tool == null && ((hovered != null ? ScreenGroupOf(hovered) : null) ?? ringGroup) is { } group)
+            marks = marks with { GroupOutline = RingBox(group) };
+        if (tool != null)
+        {
+            RectD SlotInView(Slot s) => camera.ToView(Screens.Frame(s, tool.Screen, Layout.Gap));
+            marks = marks with
+            {
+                DropScreen = camera.ToView(tool.Screen),
+                ToolSlots = [SlotInView(Slot.TopLeft), SlotInView(Slot.TopRight), SlotInView(Slot.BottomLeft), SlotInView(Slot.BottomRight)],
+                DropSlot = (tool.Slot ?? tool.Hover) is Slot picked2 ? SlotInView(picked2) : null,
+            };
+        }
+        else if (dropPlan != null)
+            marks = marks with { DropScreen = camera.ToView(dropPlan.Screen), DropSlot = camera.ToView(dropPlan.SlotFrame) };
+        return marks;
+    }
+
+    // MARK: Screens you build, and sizes picked zoomed out
+
+    const nint SizeLabelId = -1, HintLabelId = -2;
+
+    /// A message over the canvas for a moment (the Mac's toast).
+    void ShowHint(string text)
+    {
+        hint = text;
+        SetTimer(overlay.Hwnd, HintTimer, 2500, 0);
+        Redraw();
+    }
+
+    /// The screen at 100% as a rectangle on the canvas with its top-left at `origin`: what a screen
+    /// you build fills: the work area, where windows are when you get there (see Screens).
+    RectD ScreenRect(Vec origin) => new(origin.X, origin.Y, work.Width, work.Height);
+
+    /// A slot's size, with the gap you chose.
+    SizeD SlotSize(Slot slot) => Screens.Frame(slot, ScreenRect(new Vec(0, 0)), Layout.Gap).Size;
+
+    /// The window edges at `p` (its outer 6 px; two at a corner) of the top window there: dragging
+    /// them resizes it. Inside only, so the gaps between a screen's windows still move the whole
+    /// screen (see ScreenRing). Not a window that sizes itself (a VM's), one too small to tell its
+    /// edges apart, or its close button.
+    (CanvasWindow w, WindowEdges edges)? ResizeHandle(Vec p)
+    {
+        if (WindowAt(p) is not CanvasWindow w || w.SizesItself) return null;
+        double k = UiScale;
+        var r = camera.ToView(w.Frame);
+        if (!r.Contains(p) || r.W <= 40 * k || r.H <= 30 * k) return null;
+        if (CloseShown(w, w, k) && Marks.CloseRect(r, k).Contains(p)) return null;
+        var edges = WindowEdges.None;
+        if (p.X - r.X <= 6 * k) edges |= WindowEdges.Left; else if (r.Right - p.X <= 6 * k) edges |= WindowEdges.Right;
+        if (p.Y - r.Y <= 6 * k) edges |= WindowEdges.Top; else if (r.Bottom - p.Y <= 6 * k) edges |= WindowEdges.Bottom;
+        return edges == WindowEdges.None ? null : (w, edges);
+    }
+
+    /// Around a screen group, in the view: the outline drawn, and the ring you grab to move it.
+    RectD RingBox(IReadOnlyList<CanvasWindow> group) => camera.ToView(Outline(group)).Inset(-12 * UiScale, -12 * UiScale);
+
+    /// The screen group whose ring is at `p` (not on one of its windows: the outline round it, or a
+    /// gap between them).
+    List<CanvasWindow>? ScreenRing(Vec p)
+    {
+        foreach (var g in Layout.ScreenGroups(windows.Select(w => w.Frame).ToList(), WorkSize))
+        {
+            var group = g.Select(i => windows[i]).ToList();
+            if (RingBox(group).Contains(p)) return group;
+        }
+        return null;
+    }
+
+    /// The groups that are screens you built (or arranged that way by hand), each window with its
+    /// slot (see Screens.LayoutOf). `excluding`: a window being dragged, which isn't where it was.
+    IEnumerable<(RectD screen, List<(CanvasWindow w, Slot slot)> members)> BuiltScreens(CanvasWindow? excluding)
+    {
+        var ws = windows.Where(w => w != excluding).ToList();
+        foreach (var g in Layout.ScreenGroups(ws.Select(w => w.Frame).ToList(), WorkSize))
+        {
+            var members = g.Select(i => ws[i]).ToList();
+            if (Screens.LayoutOf(members.Select(m => m.Frame).ToList(), WorkSize, Layout.Gap) is var (screen, slots))
+                yield return (screen, members.Zip(slots).Select(z => (z.First, z.Second)).ToList());
+        }
+    }
+
+    /// The drop zone under the pointer while `w` is dragged: an empty slot of a screen you built, or
+    /// the top or bottom of one of its halves (split into quarters); else a side or corner of a
+    /// window on its own (see Screens.DropZone), which pairs the two. Null over nothing, or the
+    /// middle of a window: an ordinary move.
+    DropPlan? PlanDrop(CanvasWindow w, Vec p)
+    {
+        var c = camera.ToCanvas(p);
+        double gap = Layout.Gap;
+        foreach (var (screen, members) in BuiltScreens(w))
+        {
+            if (!screen.Contains(c)) continue;
+            var memberWindows = members.Select(m => m.w).ToList();
+            foreach (var (m, slot) in members)
+            {
+                if (!m.Frame.Contains(c)) continue;
+                if (slot is not (Slot.Left or Slot.Right)) return null;
+                var q = slot.Quarters();
+                bool top = c.Y < m.Frame.MidY;
+                var mine = top ? q[0] : q[1];
+                return new DropPlan([(m, top ? q[1] : q[0]), (w, mine)], screen, Screens.Frame(mine, screen, gap), memberWindows);
+            }
+            var taken = members.Select(m => m.slot).ToList();
+            foreach (var s in new[] { Slot.Left, Slot.Right, Slot.TopLeft, Slot.TopRight, Slot.BottomLeft, Slot.BottomRight })
+                if (!taken.Any(t => t.Overlaps(s)) && Screens.Frame(s, screen, gap).Contains(c))
+                    return new DropPlan([(w, s)], screen, Screens.Frame(s, screen, gap), memberWindows);
+            return null;
+        }
+        CanvasWindow? target = null;
+        for (int i = windows.Count - 1; i >= 0 && target == null; i--)
+            if (windows[i] != w && windows[i].Frame.Contains(c)) target = windows[i];
+        if (target == null || Screens.DropZone(c, target.Frame) is not Slot mineSlot) return null;
+        var theirs = mineSlot.OtherHalf();
+        var origin = Screens.ScreenOrigin(target.Frame, theirs, WorkSize, gap);
+        var built = ScreenRect(origin);
+        return new DropPlan([(target, theirs), (w, mineSlot)], built, Screens.Frame(mineSlot, built, gap), []);
+    }
+
+    /// Puts windows into the slots of a screen whose top-left is `origin` (see Screens): each takes
+    /// its slot's size for real, straight away, and its spot; windows in the way move clear, far
+    /// enough not to join it. `members`: windows already in the screen, which stay. `how` says which
+    /// way you built it, for the log.
+    void Arrange(List<(CanvasWindow w, Slot slot)> placements, Vec origin, List<CanvasWindow> members, string how)
+    {
+        if (placements.Count == 0) return;
+        var screen = ScreenRect(origin);
+        RecordUndo($"screen of {placements.Count}");
+        foreach (var (w, slot) in placements)
+        {
+            var f = Screens.Frame(slot, screen, Layout.Gap);
+            var before = w.Frame.Origin;
+            var size = SetSize(w, f.Size);
+            w.Frame = new RectD(f.X, f.Y, size.W, size.H);
+            NoteUserMove(w, before);
+            PictureMoved(w);
+        }
+        Log.Info($"screen: {string.Join(", ", placements.Select(p => $"{p.w} {p.slot.Name()}"))} ({how})");
+        MakeRoom(screen, placements.Select(p => p.w).Concat(members).ToHashSet(), Layout.ScreenGroupReach + 1);
+        Relayout();
+        ScheduleSave();
+    }
+
+    /// A size you picked zoomed out for one window (the right-click menu, an edge you dragged): its
+    /// top-left stays put (or goes to `origin`, for a left or top edge), and windows it now overlaps
+    /// move clear.
+    void ResizeWindow(CanvasWindow w, SizeD size, Vec? origin, string how)
+    {
+        RecordUndo("resize");
+        var before = w.Frame;
+        if (origin is Vec o) w.Frame = w.Frame with { X = Layout.Round(o.X), Y = Layout.Round(o.Y) };
+        var actual = SetSize(w, size);
+        Log.Info($"resize {w} {before.W:0}x{before.H:0} -> {actual.W:0}x{actual.H:0} ({how})");
+        NoteUserMove(w, before.Origin);
+        PictureMoved(w);
+        MakeRoom(w.Frame, new HashSet<CanvasWindow> { w }, 0);
+        Relayout();
+        ScheduleSave();
+    }
+
+    /// Same width, height or size as `model` for the other windows in `ws` (the right-click menu,
+    /// with several picked): each keeps its top-left, and windows they now overlap are pushed apart
+    /// (see Layout.Separate); overlaps there before are left.
+    void EvenUp(List<CanvasWindow> ws, CanvasWindow model, bool width, bool height)
+    {
+        var before = windows.Select(w => w.Frame).ToArray();
+        RecordUndo("even up");
+        int changed = 0;
+        foreach (var w in ws.Where(w => w != model && !w.SizesItself))
+        {
+            var size = new SizeD(width ? model.Frame.W : w.Frame.W, height ? model.Frame.H : w.Frame.H);
+            if (size == w.Frame.Size) continue;
+            SetSize(w, size);
+            changed++;
+        }
+        var frames = windows.Select(w => w.Frame).ToArray();
+        int m = windows.IndexOf(model);
+        Layout.Separate(frames, Layout.Gap, onlyOverlaps: true, keep: Layout.OverlappingPairs(before), fixedFrames: m >= 0 ? new HashSet<int> { m } : null);
+        for (int i = 0; i < windows.Count; i++)
+        {
+            var w = windows[i];
+            if (frames[i].Origin == w.Frame.Origin) continue;
+            var was = w.Frame.Origin;
+            w.Frame = w.Frame with { X = frames[i].X, Y = frames[i].Y };
+            NoteUserMove(w, was);
+            PictureMoved(w);
+        }
+        Log.Info($"even up: {(width && height ? "size" : width ? "width" : "height")} of {model} for {changed} windows");
+        Relayout();
+        ScheduleSave();
+    }
+
+    /// Sizes `w`, the real window too, straight away (zoomed out, the canvas hides it): the size it
+    /// takes is the size you chose. An app that won't take it (a minimum width, a VM's window) keeps
+    /// what it will, and a message says so. A maximised window becomes an ordinary one of that size.
+    SizeD SetSize(CanvasWindow w, SizeD size)
+    {
+        var target = new SizeD(Layout.Round(size.W), Layout.Round(size.H));
+        if (w.Maximised && !w.SizesItself)
+        {
+            if (IsZoomed(w.Hwnd)) w.RestoreForMoving(work);
+            (w.Maximised, w.RestoredByUs, w.NormalRect) = (false, false, null);
+        }
+        var actual = w.SizesItself ? w.Frame.Size : ResizeReal(w, target);
+        if (Math.Abs(actual.W - target.W) > AppRounding || Math.Abs(actual.H - target.H) > AppRounding)
+        {
+            Log.Info($"can't size {w} to {target.W:0}x{target.H:0}: took {actual.W:0}x{actual.H:0}");
+            ShowHint($"{w.AppName} can't be made that size");
+        }
+        w.Frame = w.Frame with { W = actual.W, H = actual.H };
+        w.Preferred = actual;
+        return actual;
+    }
+
+    /// Windows other than `keeping` in `area`, or within `clearance` of it, move clear (see
+    /// Layout.MakeRoom). Their spots go with them.
+    void MakeRoom(RectD area, ISet<CanvasWindow> keeping, double clearance)
+    {
+        var others = windows.Where(w => !keeping.Contains(w)).ToList();
+        var frames = Layout.MakeRoom(area, others.Select(w => w.Frame).ToList(), clearance);
+        for (int i = 0; i < others.Count; i++)
+        {
+            var w = others[i];
+            if (frames[i].Origin == w.Frame.Origin) continue;
+            var before = w.Frame.Origin;
+            w.Frame = w.Frame with { X = frames[i].X, Y = frames[i].Y };
+            NoteUserMove(w, before);
+            PictureMoved(w);
+        }
+    }
+
+    /// How every window was before a screen or size change, for Ctrl+Z (see Undo).
+    sealed record UndoState(CanvasWindow W, RectD Frame, SizeD Preferred, Vec? Home, Vec FitPush, bool Maximised);
+    sealed record UndoStep(string Name, List<UndoState> States);
+    readonly List<UndoStep> undoSteps = new();
+
+    void RecordUndo(string name)
+    {
+        undoSteps.Add(new UndoStep(name, windows.Select(w => new UndoState(w, w.Frame, w.Preferred, w.Home, w.FitPush, w.Maximised)).ToList()));
+        if (undoSteps.Count > 20) undoSteps.RemoveAt(0);
+    }
+
+    /// Ctrl+Z zoomed out: every window back as it was before the last screen you built or size you
+    /// picked, real sizes too. Moves on their own aren't undone.
+    void Undo()
+    {
+        if (undoSteps.Count == 0) return;
+        var step = undoSteps[^1];
+        undoSteps.RemoveAt(undoSteps.Count - 1);
+        foreach (var s in step.States)
+        {
+            var w = s.W;
+            if (!windows.Contains(w)) continue;
+            bool resized = s.Frame.Size != w.Frame.Size;
+            if (resized && !w.SizesItself) ResizeReal(w, s.Frame.Size);
+            w.Frame = s.Frame;
+            w.Preferred = s.Preferred;
+            w.Home = s.Home;
+            w.FitPush = s.FitPush;
+            // Maximised again where maximised windows sit (see PlaceOne).
+            if (s.Maximised && !w.Maximised) (w.Maximised, w.RestoredByUs) = (true, true);
+            PictureMoved(w);
+        }
+        Log.Info($"undo: {step.Name}");
+        Relayout();
+        ScheduleSave();
+    }
+
+    // MARK: The right-click menu
+
+    /// Zoomed out: a window's sizes, or on empty canvas, what you can do with it all.
+    void ContextMenu(Vec p)
+    {
+        if (tool != null || desktopsPanel.Panel.Contains(p) || minimap.Panel.Contains(p)) return;
+        sizing = null;
+        GetCursorPos(out var at);
+        var items = WindowAt(p) is CanvasWindow w ? WindowMenu(w) : CanvasMenu(camera.ToCanvas(p));
+        Tray.Popup(overlay.Hwnd, at.X, at.Y, items);
+    }
+
+    List<Tray.Item?> WindowMenu(CanvasWindow w)
+    {
+        bool sizable = !w.SizesItself;
+        var items = new List<Tray.Item?>
+        {
+            new("Fill screen", () => ResizeWindow(w, SlotSize(Slot.Full), null, "menu"), Enabled: sizable),
+            new("Half screen", () => ResizeWindow(w, SlotSize(Slot.Left), null, "menu"), Enabled: sizable),
+            new("Quarter screen", () => ResizeWindow(w, SlotSize(Slot.TopLeft), null, "menu"), Enabled: sizable),
+            new("Same size as\u2026", () =>
+            {
+                sizing = w;
+                hoverCursor = IDC_CROSS;
+                SetCursor(LoadCursor(0, IDC_CROSS));
+                ShowHint("Click the window whose size to take");
+            }, Enabled: sizable),
+            new("Back to its own size", () => ResizeWindow(w, new SizeD(w.Original.Value.Width - w.Insets.Left - w.Insets.Right, w.Original.Value.Height - w.Insets.Top - w.Insets.Bottom), null, "its own size"),
+                Enabled: sizable && w.Original != null),
+        };
+        var picked = windows.Where(selected.Contains).ToList();
+        if (picked.Contains(w) && picked.Count > 1)
+        {
+            // Evening up: the others take this one's width, height or both.
+            items.Add(null);
+            items.Add(new("Same width", () => EvenUp(picked, w, true, false)));
+            items.Add(new("Same height", () => EvenUp(picked, w, false, true)));
+            items.Add(new("Same size", () => EvenUp(picked, w, true, true)));
+        }
+        if (picked.Contains(w) && picked.Count is >= 2 and <= 4)
+            items.Add(new("Make a screen", null, Children: LayoutMenu(picked)));
+        return items;
+    }
+
+    List<Tray.Item?> CanvasMenu(Vec c) =>
+    [
+        new("New screen", () => StartTool(c)),
+        null,
+        new("Tidy up", Tidy),
+        new("Fit everything", () => { CancelAnimation(); Animate(FitCamera(1), 0.22); }),
+    ];
+
+    /// The screens these 2-4 windows can make, drawn small: picking one (or pressing its number) puts
+    /// them in, each in the slot nearest where it is.
+    List<Tray.Item?> LayoutMenu(List<CanvasWindow> ws) => ScreenLayout.For(ws.Count)
+        .Select((layout, i) => (Tray.Item?)new Tray.Item($"&{i + 1}  {layout.Title}", () => MakeScreen(ws, layout), Picture: layout)).ToList();
+
+    void ShowLayouts(List<CanvasWindow> ws)
+    {
+        var box = RingBox(ws);
+        Tray.Popup(overlay.Hwnd, monitor.Left + (int)box.MidX, monitor.Top + (int)box.MidY, LayoutMenu(ws));
+    }
+
+    /// The windows into `layout`, each in the slot nearest where it is (see Screens.Assign); the one
+    /// in its first slot (the left, or top-left) stays where it is.
+    void MakeScreen(List<CanvasWindow> ws, ScreenLayout layout)
+    {
+        var slots = Screens.Assign(ws.Select(w => w.Frame.Center).ToList(), layout);
+        var placements = ws.Zip(slots).Select(z => (z.First, z.Second)).ToList();
+        var anchor = placements.Cast<(CanvasWindow w, Slot slot)?>().FirstOrDefault(p => p!.Value.slot == layout.Slots[0]) ?? placements[0];
+        var origin = Screens.ScreenOrigin(anchor.w.Frame, anchor.slot, WorkSize, Layout.Gap);
+        selected.Clear();
+        Arrange(placements, origin, [], "layout");
+    }
+
+    // MARK: The screen tool
+
+    void StartTool(Vec c)
+    {
+        tool = new ScreenTool(ScreenRect(new Vec(Layout.Round(c.X - work.Width / 2.0), Layout.Round(c.Y - work.Height / 2.0))));
+        selected.Clear();
+        Log.Info("screen tool: started");
+        Redraw();
+    }
+
+    /// The windows in the screen at `screen`, each with its slot (see Screens.SlotOf).
+    List<(CanvasWindow w, Slot slot)> ScreenMembers(RectD screen) => windows
+        .Select(w => (w, slot: Screens.SlotOf(w.Frame, screen, Layout.Gap)))
+        .Where(m => m.slot != null).Select(m => (m.w, m.slot!.Value)).ToList();
+
+    /// A click with the tool on: a slot (puts the window you picked there, or picks the slot), a
+    /// window (puts it in the slot you picked, or picks it), the frame's edge while it's empty
+    /// (moves it), or empty canvas (done).
+    void ToolClick(Vec p)
+    {
+        if (tool is not ScreenTool t) return;
+        double k = UiScale;
+        var edge = camera.ToView(t.Screen);
+        if (edge.Inset(-12 * k, -12 * k).Contains(p) && !edge.Inset(12 * k, 12 * k).Contains(p) && ScreenMembers(t.Screen).Count == 0)
+        {
+            drag = new Drag(DragKind.ToolScreen, p) { StartFrame = t.Screen };
+            SetCapture(overlay.Hwnd);
+            return;
+        }
+        if (Screens.ToolSlot(camera.ToCanvas(p), t.Screen) is Slot slot)
+        {
+            if (t.Window is CanvasWindow picked) ToolPlace(picked, slot);
+            else { t.Slot = slot; Redraw(); }
+        }
+        else if (WindowAt(p) is CanvasWindow w)
+        {
+            if (t.Slot is Slot s) ToolPlace(w, s);
+            else
+            {
+                t.Window = w;
+                selected.Clear();
+                selected.Add(w);
+                Redraw();
+            }
+        }
+        else FinishTool(cancel: false);
+    }
+
+    /// `w` into `slot` of the tool's screen: a window in the half a quarter is part of moves to its
+    /// other quarter, one in its way leaves (see Screens.MakeWay).
+    void ToolPlace(CanvasWindow w, Slot slot)
+    {
+        if (tool is not ScreenTool t) return;
+        var there = ScreenMembers(t.Screen).Where(m => m.w != w).ToList();
+        var placements = new List<(CanvasWindow w, Slot slot)> { (w, slot) };
+        var stay = new List<CanvasWindow>();
+        var ways = Screens.MakeWay(slot, there.Select(m => m.slot).ToList());
+        for (int i = 0; i < there.Count; i++)
+        {
+            if (ways[i] == there[i].slot) stay.Add(there[i].w);
+            else if (ways[i] is Slot now) placements.Add((there[i].w, now));
+        }
+        Arrange(placements, t.Screen.Origin, stay, "tool");
+        t.Steps++;
+        t.Slot = null;
+        t.Window = null;
+        selected.Clear();
+        Redraw();
+    }
+
+    /// Return or a click on empty canvas: done. Esc: everything it did undone.
+    void FinishTool(bool cancel)
+    {
+        if (tool is not ScreenTool t) return;
+        tool = null;
+        if (cancel) for (int i = 0; i < t.Steps; i++) Undo();
+        selected.Clear();
+        Log.Info($"screen tool: {(cancel ? "cancelled" : "done")} ({t.Steps} placed)");
+        Redraw();
+    }
+
+    /// The click after "Same size as...": the window clicked gives its size; anywhere else, nothing.
+    void FinishSizing(Vec p)
+    {
+        var w = sizing;
+        sizing = null;
+        hoverCursor = IDC_ARROW;
+        SetCursor(LoadCursor(0, IDC_ARROW));
+        if (w != null && WindowAt(p) is CanvasWindow source && source != w)
+            ResizeWindow(w, source.Frame.Size, null, $"same size as {source}");
     }
 
     /// Windows that get a title, bottom-most first: not tiny, in view, and not with their top
@@ -2576,6 +3530,13 @@ sealed class Canvas
         string arg = parts.Length > 1 ? parts[1].Trim() : "";
         // Not the arguments of pick and close: they're window titles.
         Log.Info($"command: {(verb is "pick" or "close" && arg.Length > 0 ? verb + " (title)" : request.Text.Trim())}");
+        // For testing: any program of yours can reach this pipe, and these fake the screen or say
+        // where updates come from.
+        if (Updater.IsRelease && verb is "update-source" or "screen" or "monitor" or "pictures")
+        {
+            request.Reply("not in a release");
+            return;
+        }
         switch (verb)
         {
             case "state": request.Reply(State()); break;
@@ -2593,22 +3554,20 @@ sealed class Canvas
             case "windows": request.Reply(CanvasWindow.Describe()); break;
             case "centre": CentreCurrentWindow(); WhenIdle(request); break;
             case "restoreall": RestoreAll(); request.Reply("done"); break;
-            case "fit": // the 0 key, from anywhere: zoomed out, everything in view
-                if (!active) Enter(zoomOut: true);
-                else { CancelAnimation(); returnCamera = null; Animate(FitCamera(1), 0.22); }
+            case "fit": // the 0 key, zoomed out: everything in view (at 100%, nothing)
+                if (active && !gliding) { CancelAnimation(); Animate(FitCamera(1), 0.22); }
                 WhenIdle(request);
                 break;
-            case "zoom" when double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out double scale):
-                if (!active) Enter(zoomOut: true, overview: false);
-                ZoomKey(Math.Clamp(scale, Camera.MinScale, Camera.MaxScale));
+            case "zoom" when double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out double scale) && double.IsFinite(scale):
+                if (active && !gliding) ZoomKey(Math.Clamp(scale, Camera.MinScale, Camera.MaxScale));
                 WhenIdle(request);
                 break;
             case "pan":
             {
-                var d = arg.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(v => double.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, out double n) ? n : 0).ToArray();
-                if (!active) Enter(zoomOut: true, overview: false);
-                if (d.Length == 2) PanBy(new Vec(-d[0], -d[1]));
+                // Two finite numbers, or it does nothing: a bad number mustn't poison the camera.
+                var numbers = arg.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var d = numbers.Select(v => double.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, out double n) && double.IsFinite(n) ? n : (double?)null).ToArray();
+                if (active && !gliding && d.Length == 2 && d[0] is double dx && d[1] is double dy) PanBy(new Vec(-dx, -dy));
                 request.Reply(State());
                 break;
             }
@@ -2630,6 +3589,29 @@ sealed class Canvas
                 request.Reply($"hot corner {settings.HotCorner}");
                 break;
             case "welcome": ShowWelcome(); request.Reply("shown"); break;
+            case "menu": // the panel, as a click on the tray icon opens it
+                panel.Show(tray.IconRect());
+                request.Reply(State());
+                break;
+            case "menuclose":
+                panel.Close(restoreFocus: true);
+                request.Reply("closed");
+                break;
+            case "motion" when arg is "follow" or "glide" or "jump":
+                settings.Motion = arg;
+                settings.Save();
+                request.Reply(arg);
+                break;
+            case "gap" when double.TryParse(arg, out double gap):
+                settings.WindowGap = gap;
+                settings.Save();
+                Layout.Gap = settings.ValidGap;
+                request.Reply($"{Layout.Gap}");
+                break;
+            case "poweroff" when !Updater.IsRelease: // what a sign-out or restart starting does
+                WillPowerOff();
+                request.Reply("paused");
+                break;
             case "names": // Show Window Names on or off
                 settings.ShowNames = arg == "on";
                 settings.Save();
@@ -2640,7 +3622,7 @@ sealed class Canvas
                 request.Reply($"detailed logging {(settings.DetailedLogging ? "on" : "off")}");
                 break;
             case "copylogs": CopyLogs(); request.Reply("copied"); break;
-            case "admin": // as Include Admin Windows on the tray menu
+            case "admin": // as Include admin windows in Settings
                 request.Reply(Elevation.IsElevated ? "starting again as you" : "starting again as administrator (Windows asks first)");
                 ToggleAdminWindows();
                 break;
@@ -2766,7 +3748,12 @@ sealed class Canvas
             paused,
             guides = guides.Select(g => $"{g.From.X:0},{g.From.Y:0} -> {g.To.X:0},{g.To.Y:0}"),
             guidesOverPictures,
-            settings = new { settings.AutoCentre, settings.Wallpaper },
+            settings = new { settings.AutoCentre, settings.Wallpaper, settings.Motion, gap = Layout.Gap, lowMotion = LowMotion },
+            groups = Layout.ScreenGroups(windows.Select(w => w.Frame).ToList(), WorkSize).Select(g => g.Select(i => $"0x{windows[i].Hwnd:X}").ToArray()).ToArray(),
+            undoSteps = undoSteps.Count,
+            screenTool = tool != null,
+            panelShown = panel.IsShown,
+            settling = suspendTracking,
             animating = animation != null,
             camera = new { x = camera.Origin.X, y = camera.Origin.Y, scale = camera.Scale },
             screen = monitor.ToString(),
@@ -2888,6 +3875,7 @@ sealed class Canvas
         {
             $"Canvas: {windows.Count} windows, {(paused ? "paused" : "running")}, auto-centre {(settings.AutoCentre ? "on" : "off")}, hot corner {settings.HotCorner}",
             $"Desktop picture background {(settings.Wallpaper ? "on" : "off")}, window names {(settings.ShowNames ? "shown" : "hidden")}, pictures {pictures.Name}, detailed logging {(settings.DetailedLogging ? "on" : "off")}",
+            $"Glides and zooms: {settings.Motion}{(LowMotion ? " (jumping)" : "")}, gaps between windows {Layout.Gap}",
         };
         bool copied = BugReport.Copy(overlay.Hwnd, lines);
         Log.Info(copied ? "copied logs for a bug report" : "copy logs: the clipboard was busy");
@@ -2912,17 +3900,8 @@ sealed class Canvas
         PostMessage(overlay.Hwnd, WM_RUN, 0, 0);
     }
 
-    /// Install (once one's ready), Check for Updates, and on release builds, checking by itself.
-    IEnumerable<Tray.Item?> UpdateMenu()
-    {
-        if (updater.Ready is { } ready) yield return new($"Install Expanse {ready.release.Version}…", AskToInstall, Enabled: !active);
-        yield return new("Check for Updates…", CheckForUpdates);
-        if (Updater.IsRelease)
-            yield return new("Check for Updates Automatically", () => { settings.CheckForUpdates = !settings.CheckForUpdates; settings.Save(); }, settings.CheckForUpdates);
-    }
-
-    /// Found by itself: the tray icon says so, once per version; clicking the note opens the menu,
-    /// which has Install at the top of its last part.
+    /// Found by itself: the tray icon says so, once per version; clicking the note opens the panel,
+    /// which has a banner to install it.
     void UpdateReady(Updater.Release release)
     {
         if (settings.UpdateNoted == release.Version) return;
@@ -2930,6 +3909,7 @@ sealed class Canvas
         settings.Save();
         tray.Notify($"Expanse {release.Version} is ready to install",
             "Install it from the tray icon (click here). Expanse restarts, and your windows stay where they are.");
+        panel.Refresh();
     }
 
     /// Check for Updates…: you asked, so you hear how it went.
@@ -2997,7 +3977,7 @@ sealed class Canvas
             string title = Title(h);
             if (title.Length > 40) title = title[..39] + "…";
             tray.Notify("Expanse can't move admin windows",
-                $"\"{title}\" runs as administrator. To include such windows, choose Include Admin Windows from Expanse's menu.");
+                $"\"{title}\" runs as administrator. To include such windows, turn on Include admin windows in Expanse's Settings (its tray icon, then the gear).");
             settings.AdminNoteShown = true;
             settings.Save();
         }
@@ -3040,8 +4020,10 @@ sealed class Canvas
         PostQuitMessage(0);
     }
 
-    public void Quit()
+    public void Quit(string why = "asked")
     {
+        Log.Info($"quitting: {why}");
+        panel.Close(restoreFocus: false);
         events.Dispose();
         desktopInput.Dispose();
         tray.Dispose();

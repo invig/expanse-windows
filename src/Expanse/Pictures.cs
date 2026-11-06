@@ -35,6 +35,10 @@ interface IPictures : IDisposable
     /// Positions every picture for `camera` (view = the overlay's client area).
     void Layout(IReadOnlyList<CanvasWindow> windows, Camera camera, RectD view);
 
+    /// While `w`'s edges are dragged: its picture scaled by `scale`, so it isn't stretched until the
+    /// real window takes the new size (1: as it is).
+    void Preview(CanvasWindow w, double scale);
+
     /// `w`'s canvas frame changed (dragged, tidied): its picture follows.
     void Moved(CanvasWindow w, Camera camera, RectD view);
 
@@ -81,6 +85,14 @@ readonly record struct Label(nint Hwnd, string Text, RectD Picture);
 readonly record struct Marks(IReadOnlyList<(nint hwnd, RectD picture, bool selected)> Rings, RectD? SelectionBox, RectD? Marquee,
     IReadOnlyList<(nint hwnd, RectD picture)> Closes)
 {
+    /// Round the screen group under the pointer: what a click goes to, and the ring that moves it.
+    public RectD? GroupOutline { get; init; }
+    /// Where a dropped window (or the screen tool's next one) goes, and the screen it's in.
+    public RectD? DropSlot { get; init; }
+    public RectD? DropScreen { get; init; }
+    /// The screen tool's quarters.
+    public IReadOnlyList<RectD> ToolSlots { get; init; } = [];
+
     public static readonly Marks None = new([], null, null, []);
 
     /// The close button of a picture drawn at `r`: 26 px (at 100%), 10 px in from the top-right
@@ -119,6 +131,9 @@ sealed class ThumbnailPictures(nint dest) : IPictures
     readonly Dictionary<nint, Picture> pictures = new();
 
     public string Name => "dwm-thumbnails";
+
+    /// Its destination follows the frame (see Layout): stretched while edges are dragged.
+    public void Preview(CanvasWindow w, double scale) { }
 
     /// DWM draws its thumbnails over everything, so one of the desktop would cover the titles and
     /// rings on the backdrop: the backdrop's own copy of the desktop picture shows.

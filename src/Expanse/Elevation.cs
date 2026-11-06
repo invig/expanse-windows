@@ -8,7 +8,7 @@ namespace Expanse;
 /// Admin windows: an admin terminal, Task Manager, an installer, regedit. Windows won't let a
 /// program move the windows of one running at a higher integrity level (UIPI), so Expanse run
 /// normally can't place them, and leaves them off the canvas, where they are. Run as
-/// administrator ("Include Admin Windows" on the tray menu) it can.
+/// administrator ("Include admin windows" in Settings) it can.
 static class Elevation
 {
     const int Medium = 0x2000, High = 0x3000;

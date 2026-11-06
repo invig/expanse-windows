@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Expanse;
 
-/// The choices on the tray menu, kept in %LOCALAPPDATA%\Expanse\settings.json.
+/// The choices in the tray panel, kept in %LOCALAPPDATA%\Expanse\settings.json.
 sealed class Settings
 {
     /// A window that gets focus while it isn't fully on screen (from the taskbar, Alt-Tab, or an
@@ -38,6 +38,16 @@ sealed class Settings
 
     /// The update the tray icon last said was ready (said once per version).
     public string? UpdateNoted { get; set; }
+
+    /// Moving around: "follow" jumps when Windows' Animation effects are off, "glide" always
+    /// animates, "jump" goes straight to where a move ends (the Mac's Low motion).
+    public string Motion { get; set; } = "follow";
+
+    /// Gaps between windows: 20 (the default), 10 or none (see Layout.Gap).
+    public double WindowGap { get; set; } = 20;
+
+    /// The gap, if it's one of the three: what's in the file is yours to edit.
+    public double ValidGap => WindowGap is 0 or 10 ? WindowGap : 20;
 
     static string File => Path.Combine(Log.Folder, "settings.json");
 

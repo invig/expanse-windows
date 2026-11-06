@@ -1,7 +1,7 @@
 namespace Expanse;
 
 /// Timestamped lines: the last couple of thousand in memory (for `ctl log` and Copy Logs for a Bug
-/// Report), and with Detailed Logging on (the tray's Troubleshooting menu) in
+/// Report), and with Detailed Logging on (the panel's Troubleshooting menu) in
 /// %LOCALAPPDATA%\Expanse\expanse.log too. As on the Mac, what Expanse did with which app's
 /// windows, never their titles: callers log windows by app and handle (CanvasWindow.ToString).
 static class Log

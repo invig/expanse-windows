@@ -47,6 +47,9 @@ sealed class SavedWindow
     /// they identify the window exactly, even among windows with the same title.
     public long Hwnd { get; set; }
     public uint Pid { get; set; }
+    /// Not on the canvas when this was saved: a spot kept for a window out of view, or one not
+    /// back yet. A layout's picture leaves these out.
+    public bool Away { get; set; }
 }
 
 static class LayoutStore
@@ -54,11 +57,38 @@ static class LayoutStore
     static string File => Path.Combine(Log.Folder, "layout.json");
     static readonly JsonSerializerOptions json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public static SavedLayout? Load()
+    public static SavedLayout? Load() => System.IO.File.Exists(File) ? Read(File) : null;
+
+    /// A layout file is yours to edit, and any program of yours could write it: what it says moves
+    /// other apps' windows, so only numbers within reason are taken (a window with others is left
+    /// out, as on the Mac). A title not hashed is hashed (see TitleKey), so the next save doesn't
+    /// carry it on.
+    static SavedLayout? Read(string path)
     {
-        try { return System.IO.File.Exists(File) ? JsonSerializer.Deserialize<SavedLayout>(System.IO.File.ReadAllText(File), json) : null; }
-        catch (Exception e) { Log.Info($"layout: couldn't read {File}: {e.Message}"); return null; }
+        SavedLayout? layout;
+        try { layout = JsonSerializer.Deserialize<SavedLayout>(System.IO.File.ReadAllText(path), json); }
+        catch (Exception e) { Log.Info($"layout: couldn't read {path}: {e.Message}"); return null; }
+        if (layout == null || !Plausible(layout.CenterX) || !Plausible(layout.CenterY)) return null;
+        static double? Valid(double? v) => v is double d && Plausible(d) ? d : null;
+        static double? Size(double? v) => Valid(v) is double d && d > 0 ? d : null;
+        if (Size(layout.FittedWidth) == null || Size(layout.FittedHeight) == null) (layout.FittedWidth, layout.FittedHeight) = (null, null);
+        layout.Windows = (layout.Windows ?? new()).Where(e => e != null && Plausible(e.X) && Plausible(e.Y)
+            && Size(e.W) != null && Size(e.H) != null).ToList();
+        foreach (var e in layout.Windows)
+        {
+            if (Valid(e.HX) == null || Valid(e.HY) == null) (e.HX, e.HY) = (null, null);
+            if (Size(e.PW) == null || Size(e.PH) == null) (e.PW, e.PH) = (null, null);
+            e.App ??= "";
+            e.Class ??= "";
+            e.AppName ??= "";
+            e.Title ??= "";
+            if (e.Title.Length > 0 && !e.Title.StartsWith("sha256:") && !e.Title.StartsWith("hmac:")) e.Title = TitleKey(e.Title);
+        }
+        return layout;
     }
+
+    /// Far bigger than any canvas gets.
+    static bool Plausible(double v) => double.IsFinite(v) && Math.Abs(v) <= 1_000_000;
 
     /// Writes it if it changed since `last` (the JSON last written); returns what's on disk now.
     public static string? Save(SavedLayout layout, string? last)
@@ -77,9 +107,48 @@ static class LayoutStore
     }
 
     /// Window titles can be private (document names, mail subjects), so the layout file stores
-    /// a hash: enough to recognise the same window next time, not to read the title.
-    public static string TitleKey(string title) =>
-        title.Length == 0 ? "" : "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(title))[..12]);
+    /// a hash: enough to recognise the same window next time, not to read the title. It's keyed
+    /// with a secret only your Windows account can read (DPAPI), so someone with only the file (a
+    /// copy, a backup) can't check a guessed title against it either.
+    public static string TitleKey(string title)
+    {
+        if (title.Length == 0) return "";
+        if (titleSecret.Value is not byte[] secret) return PlainTitleKey(title);
+        return "hmac:" + Convert.ToHexStringLower(HMACSHA256.HashData(secret, Encoding.UTF8.GetBytes(title))[..12]);
+    }
+
+    /// What layouts saved before the key stored, and what's stored without it.
+    static string PlainTitleKey(string title) =>
+        "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(title))[..12]);
+
+    /// The key for title hashes, made on first use: titleKey.bin holds it as DPAPI encrypted it,
+    /// for this account on this PC. Without one, titles are hashed unkeyed, as before.
+    static readonly Lazy<byte[]?> titleSecret = new(() =>
+    {
+        string path = Path.Combine(Log.Folder, "titleKey.bin");
+        try
+        {
+            if (System.IO.File.Exists(path)
+                && Expanse.Native.Crypt32.Unprotect(System.IO.File.ReadAllBytes(path)) is byte[] { Length: 32 } key) return key;
+            byte[] fresh = RandomNumberGenerator.GetBytes(32);
+            if (Expanse.Native.Crypt32.Protect(fresh) is not byte[] sealedKey)
+            {
+                Log.Info("window title key not saved: titles hashed without it");
+                return null;
+            }
+            Directory.CreateDirectory(Log.Folder);
+            System.IO.File.WriteAllBytes(path, sealedKey);
+            return fresh;
+        }
+        catch (Exception e)
+        {
+            Log.Info($"window title key not available ({e.GetType().Name}): titles hashed without it");
+            return null;
+        }
+    });
+
+    /// Every form a saved entry for `title` can have.
+    static HashSet<string> TitleKeys(string title) => title.Length == 0 ? [""] : [TitleKey(title), PlainTitleKey(title)];
 
     /// Converts a layout saved at another scaling to `dpi`: spots spread from its middle, and sizes
     /// grow or shrink, by the ratio (see Canvas.ScaleCanvas).
@@ -116,7 +185,7 @@ static class LayoutStore
 
     // MARK: Snapshots
 
-    /// Earlier layouts to go back to (Restore Layout on the tray menu), newest first. One is taken
+    /// Earlier layouts to go back to (Earlier layouts in the panel), newest first. One is taken
     /// when the layout has changed and the newest is 15 minutes old, so they're minutes apart, not
     /// one per window move; only the newest three stay. As on the Mac.
     public sealed record Snapshot(DateTime Taken, string Path);
@@ -150,11 +219,7 @@ static class LayoutStore
         catch (IOException e) { Log.Info($"layout: couldn't save a snapshot: {e.Message}"); }
     }
 
-    public static SavedLayout? Load(Snapshot snapshot)
-    {
-        try { return JsonSerializer.Deserialize<SavedLayout>(System.IO.File.ReadAllText(snapshot.Path), json); }
-        catch (Exception e) { Log.Info($"layout: couldn't read {snapshot.Path}: {e.Message}"); return null; }
-    }
+    public static SavedLayout? Load(Snapshot snapshot) => Read(snapshot.Path);
 
     /// "12 minutes ago (8:30 AM)".
     public static string Describe(Snapshot s)
@@ -167,6 +232,9 @@ static class LayoutStore
             : N((int)ago.TotalDays, "day");
         return $"{rel} ({(s.Taken.Date == DateTime.Today ? s.Taken.ToString("t") : s.Taken.ToString("g"))})";
     }
+
+    /// The saved window is still open (out of view, say), in the same run of its app.
+    public static bool IsOpen(SavedWindow e) => Exists(e.Hwnd, e.Pid);
 
     /// Whether that window still exists, in that process (handles get reused).
     static bool Exists(long hwnd, uint pid)
@@ -188,8 +256,8 @@ static class LayoutStore
             // A window far smaller than an entry (an update or loading box, a small dialog) doesn't
             // take it: the app's main window, a moment later, does (see LargerSpot).
             bool Free(SavedWindow e) => !open.Contains((e.Hwnd, e.Pid)) && !Exists(e.Hwnd, e.Pid) && !TooSmall(w.Frame.Size, e);
-            string key = TitleKey(w.Title);
-            i = pool.FindIndex(e => SameApp(e, w) && e.Title == key && Free(e));
+            var keys = TitleKeys(w.Title);
+            i = pool.FindIndex(e => SameApp(e, w) && keys.Contains(e.Title) && Free(e));
             if (i < 0) i = pool.FindIndex(e => SameApp(e, w) && Free(e));
         }
         if (i < 0) return null;

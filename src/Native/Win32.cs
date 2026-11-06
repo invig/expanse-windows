@@ -242,7 +242,8 @@ public static class User32
         WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, WM_MBUTTONDOWN = 0x207,
         WM_MOUSEWHEEL = 0x20A, WM_HOTKEY = 0x312, WM_DISPLAYCHANGE = 0x7E, WM_DPICHANGED = 0x2E0,
         WM_NCHITTEST = 0x84, WM_ACTIVATE = 0x6, WM_SYSCOMMAND = 0x112, WM_APP = 0x8000,
-        WM_POWERBROADCAST = 0x218, WM_WTSSESSION_CHANGE = 0x2B1;
+        WM_POWERBROADCAST = 0x218, WM_WTSSESSION_CHANGE = 0x2B1, WM_QUERYENDSESSION = 0x11, WM_ENDSESSION = 0x16,
+        WM_RBUTTONUP = 0x205;
     public const int SC_KEYMENU = 0xF100;
 
     /// The screen locked or unlocked (WM_WTSSESSION_CHANGE's wParam), and the displays turning off
@@ -288,6 +289,10 @@ public static class User32
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern int GetClassName(nint hwnd, StringBuilder sb, int max);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetWindowRect(nint hwnd, out RECT r);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint FindWindow(string? className, string? title);
+    /// Windows' Animation effects (Settings > Accessibility > Visual effects).
+    public const uint SPI_GETCLIENTAREAANIMATION = 0x1042;
+    public const int SM_SWAPBUTTON = 23;
+    [DllImport(Dll, EntryPoint = "SystemParametersInfoW")] public static extern bool SystemParametersInfo(uint action, uint param, out int value, uint winIni);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool GetClientRect(nint hwnd, out RECT r);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetAncestor(nint hwnd, uint flags);
@@ -349,7 +354,23 @@ public static class User32
     public const int MK_SHIFT = 0x4, VK_SPACE = 0x20, VK_A = 0x41, VK_W = 0x57, VK_0 = 0x30, VK_1 = 0x31,
         VK_NUMPAD0 = 0x60, VK_NUMPAD1 = 0x61, VK_ADD = 0x6B, VK_SUBTRACT = 0x6D, VK_OEM_PLUS = 0xBB, VK_OEM_MINUS = 0xBD;
     public const uint WM_KEYUP = 0x101, WM_MOUSEHWHEEL = 0x20E;
-    public const int IDC_SIZEALL = 32646;
+    public const int IDC_SIZEALL = 32646, IDC_CROSS = 32515, IDC_SIZENWSE = 32642, IDC_SIZENESW = 32643, IDC_SIZEWE = 32644, IDC_SIZENS = 32645;
+    public const int VK_S = 0x53, VK_Z = 0x5A;
+    public const uint WM_NCCALCSIZE = 0x83, WM_MOUSELEAVE = 0x2A3;
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TRACKMOUSEEVENT { public uint cbSize, dwFlags; public nint hwndTrack; public uint dwHoverTime; }
+    [DllImport(Dll)] public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT track);
+    public const uint MIIM_BITMAP = 0x80;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MENUITEMINFO
+    {
+        public uint cbSize, fMask, fType, fState, wID;
+        public nint hSubMenu, hbmpChecked, hbmpUnchecked, dwItemData, dwTypeData;
+        public uint cch;
+        public nint hbmpItem;
+    }
+    [DllImport(Dll, EntryPoint = "SetMenuItemInfoW")] public static extern bool SetMenuItemInfo(nint menu, uint item, bool byPosition, ref MENUITEMINFO info);
+    [DllImport(Dll)] public static extern bool MessageBeep(uint type);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern short GetKeyState(int vk);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool IsWindowEnabled(nint hwnd);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool SetCursorPos(int x, int y);
@@ -507,6 +528,9 @@ public static class Dwm
     [DllImport(Dll)] public static extern int DwmGetWindowAttribute(nint hwnd, int attr, out int value, int size);
     [DllImport(Dll)] public static extern int DwmSetWindowAttribute(nint hwnd, int attr, ref int value, int size);
     [DllImport(Dll)] public static extern int DwmFlush();
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MARGINS { public int Left, Right, Top, Bottom; }
+    [DllImport(Dll)] public static extern int DwmExtendFrameIntoClientArea(nint hwnd, ref MARGINS margins);
     [DllImport(Dll)] public static extern int DwmIsCompositionEnabled(out bool enabled);
 
     /// False while DWM is down: it restarts after a graphics driver reset or update (or a crash),
@@ -525,6 +549,41 @@ public static class Dwm
     }
 }
 
+/// DPAPI: encrypted for this Windows account on this PC.
+public static class Crypt32
+{
+    [StructLayout(LayoutKind.Sequential)]
+    struct BLOB { public int Size; public nint Data; }
+
+    [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CryptProtectData(ref BLOB input, string? description, nint entropy, nint reserved, nint prompt, uint flags, out BLOB output);
+    [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CryptUnprotectData(ref BLOB input, nint description, nint entropy, nint reserved, nint prompt, uint flags, out BLOB output);
+    [DllImport("kernel32.dll")] static extern nint LocalFree(nint h);
+
+    const uint CRYPTPROTECT_UI_FORBIDDEN = 1;
+
+    public static byte[]? Protect(byte[] data) => Run(data, (ref BLOB i, out BLOB o) => CryptProtectData(ref i, "Expanse", 0, 0, 0, CRYPTPROTECT_UI_FORBIDDEN, out o));
+    public static byte[]? Unprotect(byte[] data) => Run(data, (ref BLOB i, out BLOB o) => CryptUnprotectData(ref i, 0, 0, 0, 0, CRYPTPROTECT_UI_FORBIDDEN, out o));
+
+    delegate bool Call(ref BLOB input, out BLOB output);
+
+    static byte[]? Run(byte[] data, Call call)
+    {
+        var pin = GCHandle.Alloc(data, GCHandleType.Pinned);
+        try
+        {
+            var input = new BLOB { Size = data.Length, Data = pin.AddrOfPinnedObject() };
+            if (!call(ref input, out var output)) return null;
+            var result = new byte[output.Size];
+            Marshal.Copy(output.Data, result, 0, output.Size);
+            LocalFree(output.Data);
+            return result;
+        }
+        finally { pin.Free(); }
+    }
+}
+
 public static class Shell32
 {
     public const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIM_SETVERSION = 4;
@@ -534,6 +593,15 @@ public static class Shell32
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO info);
     public const uint NOTIFYICON_VERSION_4 = 4, NIN_SELECT = 0x400, NIN_KEYSELECT = 0x401;
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern bool Shell_NotifyIcon(uint message, ref NOTIFYICONDATA data);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct NOTIFYICONIDENTIFIER
+    {
+        public uint cbSize;
+        public nint hWnd;
+        public uint uID;
+        public Guid guidItem;
+    }
+    [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER id, out RECT rect);
 }
 
 public static class Kernel32
@@ -551,11 +619,42 @@ public static class Kernel32
     }
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern nint GetModuleHandle(string? name);
     [DllImport(Dll)] public static extern uint GetCurrentThreadId();
+    /// Which order this process gets told Windows is shutting down: higher is earlier (0x100-0x3FF).
+    [DllImport(Dll)] public static extern bool SetProcessShutdownParameters(uint level, uint flags);
     [DllImport(Dll)] public static extern uint GetCurrentProcessId();
     [DllImport(Dll, SetLastError = true)] public static extern nint OpenProcess(uint access, bool inherit, uint pid);
     [DllImport(Dll)] public static extern bool CloseHandle(nint h);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool QueryFullProcessImageName(nint process, uint flags, StringBuilder sb, ref int size);
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    /// The process that started `pid`, if it's there to ask.
+    public static uint? ParentOf(uint pid)
+    {
+        nint snapshot = CreateToolhelp32Snapshot(2 /* TH32CS_SNAPPROCESS */, 0);
+        if (snapshot == -1) return null;
+        try
+        {
+            var e = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+            for (bool more = Process32First(snapshot, ref e); more; more = Process32Next(snapshot, ref e))
+                if (e.th32ProcessID == pid) return e.th32ParentProcessID;
+            return null;
+        }
+        finally { CloseHandle(snapshot); }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct PROCESSENTRY32
+    {
+        public uint dwSize, cntUsage, th32ProcessID;
+        public nint th32DefaultHeapID;
+        public uint th32ModuleID, cntThreads, th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+    [DllImport(Dll, SetLastError = true)] static extern nint CreateToolhelp32Snapshot(uint flags, uint pid);
+    [DllImport(Dll, EntryPoint = "Process32FirstW", CharSet = CharSet.Unicode)] static extern bool Process32First(nint snapshot, ref PROCESSENTRY32 e);
+    [DllImport(Dll, EntryPoint = "Process32NextW", CharSet = CharSet.Unicode)] static extern bool Process32Next(nint snapshot, ref PROCESSENTRY32 e);
 
     public static string? ProcessPath(uint pid)
     {

@@ -313,3 +313,40 @@ backend, with 10 windows, in the same session:
     snap by 95 and 64 px, lining Notepad and Terminal up a gap in (on an untidy layout, with
     windows 7 px apart, the Mac's scoring prefers pushing most windows out of sight: 893 px); the
     desktop picture costs nothing measurable (63 fps, p95 17 ms).
+12. **The Mac's 0.1.31 to 0.1.43** (6 Nov). Written on the Mac with the SDK unpacked in a scratch
+    folder (`dotnet build` with `EnableWindowsTargeting` compiles it all; the layout tests run there
+    too), then tried in the VM at the end.
+    Ported:
+    - The tray panel and its Settings page (`TrayPanel.cs`), in place of the tray menu.
+    - Screen groups; screens you build (drop zones, S, the screen tool, the ring); resizing zoomed out
+      by edges and the right-click menu; Ctrl+Z; the gap setting; low motion.
+    - Esc back to the window you were in; the scroll snap keeping your way (wheels only on their
+      way); Tidy Up's 80 px zones.
+    - Saved spots only for a restart (let go after 3 minutes), strangers at launch beside what's in
+      view, no snapshots of nothing, saving a second after the first change.
+    - Sign-out and restart handling; focus followed only when it's yours while displays settle; new
+      windows placed then too; scans waiting while the button is held (torn-off tabs); maximising
+      keeping its top-left (the Mac's Fill).
+    - Links checked and asked about from web pages; layout files checked; title hashes keyed (DPAPI);
+      update size limits; debugging commands off in releases.
+    Found here, not on the Mac: Store apps' new windows uncloak rather than show, so they opened over
+    others; a window placed as it opened could be read back before its move landed, and lost its spot
+    (3 s now, put back, not followed); a second Expanse's question about a link counted as a window.
+    Doesn't apply: no captures to stop or back off (DWM's pictures), Steam's helper windows, Space
+    tiles and the full-screen backdrop, replayd, the invisible Notification Center window's scans
+    (only its "not a dialog" half), all-windows-gone scans (a window Windows hides is still there).
+    Maths: 23,406 cases match the Mac's Swift, now with all of Screens.swift, `screenGroups`,
+    `snapEdges`, `makeRoom` and `snappedCamera`.
+    Tested in the VM: the panel light and dark, its Settings page, a real click on the tray icon and
+    clicking away; S and a layout; Ctrl+Z; a drop splitting a half into quarters (Calculator's
+    minimum height said so); an edge drag with the size shown; the right-click menus; the screen tool
+    placing a window and Esc undoing it; dragging a screen by its gap; a click and a hop on a group;
+    Esc after moving around; low motion (one frame); `ctl poweroff`, and a real restart (the query
+    arrived, windows went back, spots let go at 3 minutes); maximise and restore (view by 319,9 and
+    back); a tab torn out of Notepad (left alone while held, then beside its source); bad links
+    ignored, `zoom` doing nothing at 100%; Edge's link question, No respected; `hmac:` titles;
+    a stranger at launch; DWM thumbnails still working.
+    Not tested: an update from a release with the new limits (it'll show on the next release), Yes on
+    Edge's question after the fix, the panel on a second monitor or with the taskbar on top,
+    an x64 PC. The panel is mouse-only apart from Esc: nothing here reads it to a screen reader, and
+    it has no tooltips (what's under the pointer shows in its footer).

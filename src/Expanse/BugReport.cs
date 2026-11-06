@@ -6,7 +6,7 @@ using static Expanse.Native.User32;
 
 namespace Expanse;
 
-/// Tray menu > Troubleshooting > Copy Logs for a Bug Report: what's needed to look into a problem,
+/// The panel's Troubleshooting > Copy Logs for a Bug Report: what's needed to look into a problem,
 /// on the clipboard, ready to paste into a GitHub issue. This PC and Expanse's settings, then the log:
 /// the Detailed Logging file, or without it, this run's lines (kept in memory). As on the Mac.
 static class BugReport
