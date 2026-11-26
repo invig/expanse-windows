@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ElevationTests</AssemblyName>
+    <RootNamespace>ElevationTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Expanse\Expanse.csproj" />
+    <Content Include="native\shell_stub.c" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
