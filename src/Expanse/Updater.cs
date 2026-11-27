@@ -251,6 +251,14 @@ sealed class Updater(Action<Action> post)
     public string? Install()
     {
         if (Ready is not { } ready) return "There's no update waiting.";
+        // The download waits in your temp folder, where anything run as you could swap it before
+        // it's copied in and started, as administrator too.
+        if (Elevation.IsElevated)
+        {
+            Log.Info("update install: not while running as administrator");
+            Open(ready.release.Page);
+            return "Expanse is running as administrator, so it doesn't install updates itself.";
+        }
         string current = Environment.ProcessPath!;
         string folder = Path.GetDirectoryName(current)!;
         string staged = Path.Combine(folder, "Expanse.update.exe"), old = Path.Combine(folder, "Expanse.old.exe");
@@ -300,7 +308,7 @@ sealed class Updater(Action<Action> post)
     /// A web page in your browser. Run as administrator, through Explorer, so the browser isn't.
     public static void Open(Uri page)
     {
-        if (Elevation.IsElevated) Process.Start(new ProcessStartInfo("explorer.exe", $"\"{page}\"") { UseShellExecute = false });
+        if (Elevation.IsElevated) Process.Start(new ProcessStartInfo(Elevation.Explorer, $"\"{page}\"") { UseShellExecute = false });
         else Process.Start(new ProcessStartInfo(page.ToString()) { UseShellExecute = true });
     }
 

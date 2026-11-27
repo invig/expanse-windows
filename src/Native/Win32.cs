@@ -166,6 +166,21 @@ public static class Advapi32
     [DllImport(Dll, SetLastError = true)] public static extern bool GetTokenInformation(nint token, int infoClass, nint info, int length, out int returned);
     [DllImport(Dll)] public static extern nint GetSidSubAuthority(nint sid, uint index);
     [DllImport(Dll)] public static extern nint GetSidSubAuthorityCount(nint sid);
+
+    public const uint TOKEN_DUPLICATE = 2, MAXIMUM_ALLOWED = 0x02000000;
+    public const int SecurityImpersonation = 2, SE_FILE_OBJECT = 1;
+    public const uint OWNER_SECURITY_INFORMATION = 1, GROUP_SECURITY_INFORMATION = 2, DACL_SECURITY_INFORMATION = 4, LABEL_SECURITY_INFORMATION = 0x10;
+    [DllImport(Dll, SetLastError = true)] public static extern bool DuplicateToken(nint token, int level, out nint duplicate);
+    [DllImport(Dll, EntryPoint = "ConvertSidToStringSidW", SetLastError = true)] public static extern bool ConvertSidToStringSid(nint sid, out nint text);
+    [DllImport(Dll)] public static extern uint GetSecurityInfo(SafeHandle handle, int type, uint info, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
+    [DllImport(Dll, SetLastError = true)]
+    public static extern bool AccessCheck(nint descriptor, nint token, uint desired, ref GENERIC_MAPPING mapping, byte[] privileges, ref int privilegesLength, out uint granted, out bool status);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GENERIC_MAPPING
+    {
+        public uint GenericRead, GenericWrite, GenericExecute, GenericAll;
+    }
 }
 
 public delegate void WinEventProc(nint hook, uint ev, nint hwnd, int idObject, int idChild, uint thread, uint time);
@@ -626,6 +641,38 @@ public static class Kernel32
     [DllImport(Dll)] public static extern bool CloseHandle(nint h);
     [DllImport(Dll, CharSet = CharSet.Unicode)] public static extern bool QueryFullProcessImageName(nint process, uint flags, StringBuilder sb, ref int size);
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    public const uint READ_CONTROL = 0x20000, FILE_READ_ATTRIBUTES = 0x80, FILE_SHARE_ALL = 7, OPEN_EXISTING = 3;
+    public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000, FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    public const uint FILE_ATTRIBUTE_DIRECTORY = 0x10, FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+    public const uint VOLUME_NAME_DOS = 0, VOLUME_NAME_NT = 2;
+    [DllImport(Dll, CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string name, uint access, uint share, nint security, uint disposition, uint flags, nint template);
+    [DllImport(Dll, CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetFinalPathNameByHandle(SafeHandle file, [Out] char[] path, uint length, uint flags);
+    [DllImport(Dll, SetLastError = true)] public static extern bool GetFileInformationByHandle(SafeHandle file, out BY_HANDLE_FILE_INFORMATION info);
+    [DllImport(Dll)] public static extern nint LocalFree(nint memory);
+    [DllImport(Dll, EntryPoint = "FindFirstFileW", CharSet = CharSet.Unicode, SetLastError = true)] public static extern nint FindFirstFile(string name, out WIN32_FIND_DATA data);
+    [DllImport(Dll, EntryPoint = "FindNextFileW", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool FindNextFile(nint find, out WIN32_FIND_DATA data);
+    [DllImport(Dll)] public static extern bool FindClose(nint find);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 4)]
+    public struct WIN32_FIND_DATA
+    {
+        public uint dwFileAttributes;
+        public long ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+        public uint nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct BY_HANDLE_FILE_INFORMATION
+    {
+        public uint dwFileAttributes;
+        public long ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+        public uint dwVolumeSerialNumber, nFileSizeHigh, nFileSizeLow, nNumberOfLinks, nFileIndexHigh, nFileIndexLow;
+    }
 
     /// The process that started `pid`, if it's there to ask.
     public static uint? ParentOf(uint pid)

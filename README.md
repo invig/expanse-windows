@@ -172,6 +172,11 @@ those where they are, off the canvas. To have them on it too, turn on **Include 
 Settings (tray icon, then the gear): Expanse starts again as administrator, without moving anything. Windows asks first,
 and again each time Expanse starts while it's on.
 
+Expanse runs as administrator only from a folder only administrators can change, such as
+`C:\Program Files\Expanse`. Windows starts whatever is at Expanse.exe's path when you say yes, and in
+your user folder any program could have put something else there. A copy there doesn't update
+itself: download new versions from GitHub.
+
 </details>
 
 <details>

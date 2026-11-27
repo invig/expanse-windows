@@ -3888,7 +3888,7 @@ sealed class Canvas
     static void ShowLogFile()
     {
         if (File.Exists(Log.FilePath))
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{Log.FilePath}\"") { UseShellExecute = false });
+            Process.Start(new ProcessStartInfo(Elevation.Explorer, $"/select,\"{Log.FilePath}\"") { UseShellExecute = false });
     }
 
     // MARK: Updates
@@ -3993,6 +3993,7 @@ sealed class Canvas
         if ((want ? Elevation.StartElevated() : Elevation.StartNormal()) is string why)
         {
             Log.Info($"{(want ? "run as administrator" : "run as you")}: {why}");
+            if (want && why != Elevation.Declined) Tell("Expanse can't include admin windows from here", why);
             return;
         }
         settings.RunAsAdmin = want;
