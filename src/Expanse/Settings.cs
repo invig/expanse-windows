@@ -21,7 +21,7 @@ sealed class Settings
     public bool ShowNames { get; set; }
 
     /// Include Admin Windows: Expanse runs as administrator (Windows asks each time it starts) so
-    /// it can move admin windows too. See Elevation.
+    /// it can move admin windows too, from a folder only administrators can change. See Elevation.
     public bool RunAsAdmin { get; set; }
 
     /// Troubleshooting > Detailed Logging: the log is written to a file too (see Log).

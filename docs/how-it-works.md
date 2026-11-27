@@ -75,7 +75,11 @@ for DirectComposition and Direct2D. Nothing is injected into other apps.
   of the same size (`SetWindowPlacement`), and maximises it again at its spot.
 - **Admin windows** belong to processes at a higher integrity level, which Windows won't let a
   normal program move (UIPI). Include Admin Windows restarts Expanse elevated, and back; the two
-  copies hand over through the saved layout without moving anything.
+  copies hand over through the saved layout without moving anything. It asks for elevation only
+  when nothing run as you could change what's at Expanse.exe's path: the file, what's beside it and
+  every folder above must be owned by SYSTEM, Administrators or TrustedInstaller, with no right for
+  your unelevated token to write, delete, rename or re-permission them (`AccessCheck`), as in
+  Program Files. Run as administrator, Expanse doesn't install updates itself.
 - **Virtual desktops** are read from where Explorer keeps them in the registry (there's no public
   API); switching presses <kbd>Win</kbd> + <kbd>Ctrl</kbd> + arrows. Windows on other desktops are
   cloaked, so they leave the canvas and come back to their spots.
